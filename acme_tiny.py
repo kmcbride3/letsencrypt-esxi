@@ -25,7 +25,11 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
         proc = subprocess.Popen(cmd_list, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         out, err = proc.communicate(cmd_input)
         if proc.returncode != 0:
-            raise IOError("{0}\n{1}".format(err_msg, err))
+            try:
+                error_msg = err.decode('utf8')
+            except UnicodeDecodeError:
+                error_msg = err.decode('utf8', errors='replace')
+            raise IOError("{0}\n{1}".format(err_msg, error_msg))
         return out
 
     # helper function - make request and automatically parse json response
@@ -98,12 +102,20 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
             cmd.append(key_auth)
         
         try:
-            result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
-            if result.returncode != 0:
-                raise IOError("DNS hook failed: {0}".format(result.stderr))
-            return result.stdout
-        except subprocess.TimeoutExpired:
-            raise IOError("DNS hook timed out")
+            proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdout, stderr = proc.communicate()
+            
+            if proc.returncode != 0:
+                try:
+                    error_msg = stderr.decode('utf8')
+                except UnicodeDecodeError:
+                    error_msg = stderr.decode('utf8', errors='replace')
+                raise IOError("DNS hook failed: {0}".format(error_msg))
+            
+            try:
+                return stdout.decode('utf8')
+            except UnicodeDecodeError:
+                return stdout.decode('utf8', errors='replace')
         except OSError as e:
             raise IOError("Failed to execute DNS hook: {0}".format(e))
 

@@ -24,6 +24,12 @@ AWS_DEFAULT_REGION="us-east-1"
 DIRECTORY_URL="https://acme-v02.api.letsencrypt.org/directory"
 CONTACT_EMAIL=""          # Optional: email for Let's Encrypt account
 
+# Firewall Management
+# The script automatically manages ESXi firewall rules during certificate renewal:
+# - HTTP-01: Temporarily enables webAccess and vSphereClient rules if needed
+# - DNS-01: Temporarily enables httpClient rule if needed
+# - All original firewall states are restored after completion
+
 # File paths (usually don't need to change these)
 ACCOUNTKEY="esxi_account.key"
 KEY="esxi.key"

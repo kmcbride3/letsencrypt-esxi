@@ -33,6 +33,37 @@ log() {
    logger -p daemon.info -t "$0" "$@"
 }
 
+# Cleanup function to restore firewall rules
+cleanup_firewall() {
+  if [ "$CHALLENGE_TYPE" = "http-01" ]; then
+    # Kill HTTP server if still running
+    if [ -n "$HTTP_SERVER_PID" ]; then
+      kill -9 "$HTTP_SERVER_PID" 2>/dev/null || true
+    fi
+    
+    # Restore original firewall states
+    if [ -n "$ORIGINAL_WEBACCESS_STATE" ] && [ "$ORIGINAL_WEBACCESS_STATE" = "false" ]; then
+      esxcli network firewall ruleset set -e false -r webAccess 2>/dev/null || true
+      log "Restored webAccess firewall rule to disabled"
+    fi
+    
+    if [ -n "$ORIGINAL_VSPHERE_STATE" ] && [ "$ORIGINAL_VSPHERE_STATE" = "false" ]; then
+      esxcli network firewall ruleset set -e false -r vSphereClient 2>/dev/null || true
+      log "Restored vSphereClient firewall rule to disabled"
+    fi
+    
+  elif [ "$CHALLENGE_TYPE" = "dns-01" ]; then
+    # Restore original httpClient state
+    if [ -n "$ORIGINAL_HTTPCLIENT_STATE" ] && [ "$ORIGINAL_HTTPCLIENT_STATE" = "false" ]; then
+      esxcli network firewall ruleset set -e false -r httpClient 2>/dev/null || true
+      log "Restored httpClient firewall rule to disabled"
+    fi
+  fi
+}
+
+# Set trap to ensure cleanup on exit
+trap cleanup_firewall EXIT INT TERM
+
 log "Starting certificate renewal using $CHALLENGE_TYPE challenge.";
 
 # Preparation steps
@@ -81,8 +112,34 @@ if [ "$CHALLENGE_TYPE" = "http-01" ]; then
     /etc/init.d/rhttpproxy restart
   fi
   
-  # Start HTTP server on port 8120 for HTTP validation
+  # Firewall management for HTTP-01 (needs inbound access on port 80/443)
+  log "Configuring firewall for HTTP-01 challenge..."
+  
+  # Check current firewall state
+  firewall_enabled=$(esxcli network firewall get | grep "Enabled:" | awk '{print $NF}')
+  webaccess_enabled=$(esxcli network firewall ruleset list | grep "webAccess" | awk '{print $NF}')
+  vsphere_enabled=$(esxcli network firewall ruleset list | grep "vSphereClient" | awk '{print $NF}')
+  
+  # Store original states for restoration
+  ORIGINAL_FIREWALL_STATE="$firewall_enabled"
+  ORIGINAL_WEBACCESS_STATE="$webaccess_enabled"
+  ORIGINAL_VSPHERE_STATE="$vsphere_enabled"
+  
+  # Enable required rulesets for HTTP-01
+  if [ "$webaccess_enabled" = "false" ]; then
+    esxcli network firewall ruleset set -e true -r webAccess
+    log "Enabled webAccess firewall rule for HTTP-01"
+  fi
+  
+  if [ "$vsphere_enabled" = "false" ]; then
+    esxcli network firewall ruleset set -e true -r vSphereClient
+    log "Enabled vSphereClient firewall rule for HTTP-01"
+  fi
+  
+  # Enable outbound HTTP client for ACME communication
   esxcli network firewall ruleset set -e true -r httpClient
+  
+  # Start HTTP server on port 8120 for HTTP validation
   python -m "http.server" 8120 &
   HTTP_SERVER_PID=$!
   
@@ -97,6 +154,19 @@ elif [ "$CHALLENGE_TYPE" = "dns-01" ]; then
   if [ ! -x "$LOCALDIR/dns_hook.sh" ]; then
     log "Error: DNS hook script not found or not executable: $LOCALDIR/dns_hook.sh"
     exit 1
+  fi
+  
+  # Firewall management for DNS-01 (only needs outbound access)
+  log "Configuring firewall for DNS-01 challenge..."
+  
+  # Store current httpClient state for restoration
+  httpclient_enabled=$(esxcli network firewall ruleset list | grep "httpClient" | awk '{print $NF}')
+  ORIGINAL_HTTPCLIENT_STATE="$httpclient_enabled"
+  
+  # Enable outbound HTTP client for ACME communication (if not already enabled)
+  if [ "$httpclient_enabled" = "false" ]; then
+    esxcli network firewall ruleset set -e true -r httpClient
+    log "Enabled httpClient firewall rule for DNS-01"
   fi
   
   log "Using DNS provider: $DNS_PROVIDER"
@@ -114,10 +184,9 @@ export SSL_CERT_FILE
 
 if [ "$CHALLENGE_TYPE" = "http-01" ]; then
   CERT=$(python ./acme_tiny.py --account-key "$ACCOUNTKEY" --csr "$CSR" --acme-dir "$ACMEDIR" --directory-url "$DIRECTORY_URL" --challenge-type "$CHALLENGE_TYPE")
-  # Kill HTTP server
-  kill -9 "$HTTP_SERVER_PID" 2>/dev/null || true
 elif [ "$CHALLENGE_TYPE" = "dns-01" ]; then
   CERT=$(python ./acme_tiny.py --account-key "$ACCOUNTKEY" --csr "$CSR" --directory-url "$DIRECTORY_URL" --challenge-type "$CHALLENGE_TYPE")
+fi
 fi
 
 # If an error occurred during certificate issuance, $CERT will be empty
@@ -133,5 +202,8 @@ else
   log "Error: No cert obtained from Let's Encrypt. Generating a self-signed certificate."
   /sbin/generate-certificates
 fi
+
+# Cleanup firewall rules (also handled by trap, but explicit cleanup for clarity)
+cleanup_firewall
 
 for s in /etc/init.d/*; do if $s | grep ssl_reset > /dev/null; then $s ssl_reset; fi; done
