@@ -187,7 +187,6 @@ if [ "$CHALLENGE_TYPE" = "http-01" ]; then
 elif [ "$CHALLENGE_TYPE" = "dns-01" ]; then
   CERT=$(python ./acme_tiny.py --account-key "$ACCOUNTKEY" --csr "$CSR" --directory-url "$DIRECTORY_URL" --challenge-type "$CHALLENGE_TYPE")
 fi
-fi
 
 # If an error occurred during certificate issuance, $CERT will be empty
 if [ -n "$CERT" ] ; then
