@@ -47,10 +47,10 @@ jobs:
       - name: Verify VIB contents
         run: |
           # Check that our new DNS files are included
-          if [ -f "artifacts/w2c-letsencrypt-esxi.vib" ]; then
+          if [ -f "build/w2c-letsencrypt-esxi.vib" ]; then
             mkdir -p /tmp/vib-check
             cd /tmp/vib-check
-            ar x ../artifacts/w2c-letsencrypt-esxi.vib
+            ar x "$GITHUB_WORKSPACE/build/w2c-letsencrypt-esxi.vib"
             
             # Verify key files are in the payload
             echo "Checking VIB payload contents:"
@@ -71,8 +71,10 @@ jobs:
               exit 1
             fi
           else
-            echo "VIB file not found"
-            ls -la artifacts/ || ls -la build/
+            echo "VIB file not found, checking build directory structure:"
+            find . -name "*.vib" -type f
+            ls -la build/ || echo "No build directory"
+            ls -la artifacts/ || echo "No artifacts directory"
             exit 1
           fi
 
@@ -81,8 +83,8 @@ jobs:
         with:
           name: w2c-letsencrypt-esxi
           path: |
-            artifacts/w2c-letsencrypt-esxi.vib
-            artifacts/w2c-letsencrypt-esxi-offline-bundle.zip
+            build/w2c-letsencrypt-esxi.vib
+            build/w2c-letsencrypt-esxi-offline-bundle.zip
           if-no-files-found: error
 
   release:
