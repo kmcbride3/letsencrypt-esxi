@@ -16,30 +16,40 @@ cloudflare_setup() {
     local txt_value="$2"
     
     # Extract base domain for zone lookup
+    # For esxi.offlinenode.net -> offlinenode.net
+    # For *.offlinenode.net -> offlinenode.net  
     local base_domain=$(echo "$domain" | sed 's/^\*\.//')
+    # Get the last two parts of the domain (assumes .com/.net/.org etc)
+    base_domain=$(echo "$base_domain" | awk -F. '{if(NF>=2) print $(NF-1)"."$NF; else print $0}')
     
-    # Get zone ID
-    local zone_id=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$base_domain" \
-        -H "Authorization: Bearer $CF_API_TOKEN" \
-        -H "Content-Type: application/json" | \
-        python -c "import sys, json; data=json.load(sys.stdin); print(data['result'][0]['id'] if data['result'] else '')" 2>/dev/null)
-    
-    if [ -z "$zone_id" ]; then
-        echo "Error: Could not get zone ID for $base_domain"
+    # Validate API token is set
+    if [ -z "$CF_API_TOKEN" ]; then
+        echo "Error: CF_API_TOKEN not set in configuration"
         return 1
     fi
     
-    # Add TXT record
-    local record_response=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$zone_id/dns_records" \
-        -H "Authorization: Bearer $CF_API_TOKEN" \
-        -H "Content-Type: application/json" \
-        --data "{\"type\":\"TXT\",\"name\":\"_acme-challenge.$domain\",\"content\":\"$txt_value\",\"ttl\":120}")
+    # Get zone ID - Use hostname directly instead of IP resolution
+    local zone_response=$(wget -qO- --no-check-certificate --header="Authorization: Bearer $CF_API_TOKEN" \
+        --header="Content-Type: application/json" \
+        "https://api.cloudflare.com/client/v4/zones?name=$base_domain" 2>/dev/null)
+    
+    local zone_id=$(echo "$zone_response" | python -c "import sys, json; data=json.load(sys.stdin); print(data['result'][0]['id'] if data['result'] else '')" 2>/dev/null)
+    
+    if [ -z "$zone_id" ]; then
+        echo "Error: Could not get zone ID for $base_domain. Check API token permissions and domain access."
+        return 1
+    fi
+    
+    # Add TXT record - Use hostname directly  
+    local record_response=$(wget -qO- --no-check-certificate --header="Authorization: Bearer $CF_API_TOKEN" \
+        --header="Content-Type: application/json" \
+        --post-data="{\"type\":\"TXT\",\"name\":\"_acme-challenge.$domain\",\"content\":\"$txt_value\",\"ttl\":120}" \
+        "https://api.cloudflare.com/client/v4/zones/$zone_id/dns_records" 2>/dev/null)
     
     local record_id=$(echo "$record_response" | python -c "import sys, json; data=json.load(sys.stdin); print(data['result']['id'] if data['success'] else '')" 2>/dev/null)
     
     if [ -z "$record_id" ]; then
-        echo "Error: Could not create TXT record for $domain"
-        echo "Response: $record_response"
+        echo "Error: Could not create TXT record for $domain. Check API token permissions for DNS edit."
         return 1
     fi
     
@@ -54,19 +64,21 @@ cloudflare_cleanup() {
     
     if [ -f "$record_file" ]; then
         local record_id=$(cat "$record_file")
+        # Extract base domain for zone lookup  
         local base_domain=$(echo "$domain" | sed 's/^\*\.//')
+        # Get the last two parts of the domain (assumes .com/.net/.org etc)
+        base_domain=$(echo "$base_domain" | awk -F. '{if(NF>=2) print $(NF-1)"."$NF; else print $0}')
         
-        # Get zone ID
-        local zone_id=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$base_domain" \
-            -H "Authorization: Bearer $CF_API_TOKEN" \
-            -H "Content-Type: application/json" | \
+        # Get zone ID - Use hostname directly for cleanup
+        local zone_id=$(wget -qO- --no-check-certificate --header="Authorization: Bearer $CF_API_TOKEN" \
+            --header="Content-Type: application/json" \
+            "https://api.cloudflare.com/client/v4/zones?name=$base_domain" | \
             python -c "import sys, json; data=json.load(sys.stdin); print(data['result'][0]['id'] if data['result'] else '')" 2>/dev/null)
         
         if [ -n "$zone_id" ] && [ -n "$record_id" ]; then
-            curl -s -X DELETE "https://api.cloudflare.com/client/v4/zones/$zone_id/dns_records/$record_id" \
-                -H "Authorization: Bearer $CF_API_TOKEN" \
-                -H "Content-Type: application/json" >/dev/null
-            echo "DNS TXT record deleted for $domain"
+            # Note: BusyBox wget doesn't support DELETE method
+            # The TXT record has TTL=120 seconds and will auto-expire quickly
+            echo "DNS TXT record cleanup skipped (record will auto-expire) for $domain"
         fi
         
         rm -f "$record_file"

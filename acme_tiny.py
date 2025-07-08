@@ -110,6 +110,8 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
                     error_msg = stderr.decode('utf8')
                 except UnicodeDecodeError:
                     error_msg = stderr.decode('utf8', errors='replace')
+                except Exception:
+                    error_msg = str(stderr)
                 raise IOError("DNS hook failed: {0}".format(error_msg))
             
             try:

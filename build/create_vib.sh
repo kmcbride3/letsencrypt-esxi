@@ -44,6 +44,16 @@ mkdir -p ${BIN_DIR} ${INIT_DIR}
 cp ../* ${BIN_DIR} 2>/dev/null
 cp ../w2c-letsencrypt ${INIT_DIR}
 
+# Fix line endings for shell scripts (convert Windows CRLF to Unix LF)
+for script in renew.sh dns_hook.sh test_dns.sh test_system.sh test_cloudflare_api.sh test_domain_extraction.sh; do
+    if [ -f "${BIN_DIR}/${script}" ]; then
+        sed -i 's/\r$//' "${BIN_DIR}/${script}" 2>/dev/null || true
+    fi
+done
+if [ -f "${INIT_DIR}/w2c-letsencrypt" ]; then
+    sed -i 's/\r$//' "${INIT_DIR}/w2c-letsencrypt" 2>/dev/null || true
+fi
+
 # Ensure that shell scripts are executable
 chmod +x ${INIT_DIR}/w2c-letsencrypt ${BIN_DIR}/renew.sh ${BIN_DIR}/dns_hook.sh ${BIN_DIR}/test_dns.sh ${BIN_DIR}/test_system.sh
 
