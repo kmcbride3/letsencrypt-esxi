@@ -12,6 +12,11 @@ DIRECTORY_URL="https://acme-v02.api.letsencrypt.org/directory"
 SSL_CERT_FILE="$LOCALDIR/ca-certificates.crt"
 RENEW_DAYS=30
 
+# Default to HTTP-01 challenge
+CHALLENGE_TYPE="http-01"
+DNS_PROVIDER=""
+DNS_PROPAGATION_WAIT=30
+
 ACCOUNTKEY="esxi_account.key"
 KEY="esxi.key"
 CSR="esxi.csr"
@@ -28,7 +33,7 @@ log() {
    logger -p daemon.info -t "$0" "$@"
 }
 
-log "Starting certificate renewal.";
+log "Starting certificate renewal using $CHALLENGE_TYPE challenge.";
 
 # Preparation steps
 if [ -z "$DOMAIN" ] || [ "$DOMAIN" = "${DOMAIN/.}" ]; then
@@ -65,12 +70,36 @@ if [ -e "$VMWARE_CRT" ]; then
 fi
 
 cd "$LOCALDIR" || exit
-mkdir -p "$ACMEDIR"
 
-# Route /.well-known/acme-challenge to port 8120
-if ! grep -q "acme-challenge" /etc/vmware/rhttpproxy/endpoints.conf; then
-  echo "/.well-known/acme-challenge local 8120 redirect allow" >> /etc/vmware/rhttpproxy/endpoints.conf
-  /etc/init.d/rhttpproxy restart
+# Setup based on challenge type
+if [ "$CHALLENGE_TYPE" = "http-01" ]; then
+  mkdir -p "$ACMEDIR"
+  
+  # Route /.well-known/acme-challenge to port 8120
+  if ! grep -q "acme-challenge" /etc/vmware/rhttpproxy/endpoints.conf; then
+    echo "/.well-known/acme-challenge local 8120 redirect allow" >> /etc/vmware/rhttpproxy/endpoints.conf
+    /etc/init.d/rhttpproxy restart
+  fi
+  
+  # Start HTTP server on port 8120 for HTTP validation
+  esxcli network firewall ruleset set -e true -r httpClient
+  python -m "http.server" 8120 &
+  HTTP_SERVER_PID=$!
+  
+elif [ "$CHALLENGE_TYPE" = "dns-01" ]; then
+  # Validate DNS provider configuration
+  if [ -z "$DNS_PROVIDER" ]; then
+    log "Error: DNS_PROVIDER must be set for dns-01 challenge"
+    exit 1
+  fi
+  
+  # Check if DNS hook script exists
+  if [ ! -x "$LOCALDIR/dns_hook.sh" ]; then
+    log "Error: DNS hook script not found or not executable: $LOCALDIR/dns_hook.sh"
+    exit 1
+  fi
+  
+  log "Using DNS provider: $DNS_PROVIDER"
 fi
 
 # Cert Request
@@ -79,17 +108,18 @@ fi
 openssl genrsa -out "$KEY" 4096
 openssl req -new -sha256 -key "$KEY" -subj "/CN=$DOMAIN" -config "./openssl.cnf" > "$CSR"
 chmod 0400 "$ACCOUNTKEY" "$KEY"
-
-# Start HTTP server on port 8120 for HTTP validation
-esxcli network firewall ruleset set -e true -r httpClient
-python -m "http.server" 8120 &
 HTTP_SERVER_PID=$!
 
 # Retrieve the certificate
 export SSL_CERT_FILE
-CERT=$(python ./acme_tiny.py --account-key "$ACCOUNTKEY" --csr "$CSR" --acme-dir "$ACMEDIR" --directory-url "$DIRECTORY_URL")
 
-kill -9 "$HTTP_SERVER_PID"
+if [ "$CHALLENGE_TYPE" = "http-01" ]; then
+  CERT=$(python ./acme_tiny.py --account-key "$ACCOUNTKEY" --csr "$CSR" --acme-dir "$ACMEDIR" --directory-url "$DIRECTORY_URL" --challenge-type "$CHALLENGE_TYPE")
+  # Kill HTTP server
+  kill -9 "$HTTP_SERVER_PID" 2>/dev/null || true
+elif [ "$CHALLENGE_TYPE" = "dns-01" ]; then
+  CERT=$(python ./acme_tiny.py --account-key "$ACCOUNTKEY" --csr "$CSR" --directory-url "$DIRECTORY_URL" --challenge-type "$CHALLENGE_TYPE")
+fi
 
 # If an error occurred during certificate issuance, $CERT will be empty
 if [ -n "$CERT" ] ; then

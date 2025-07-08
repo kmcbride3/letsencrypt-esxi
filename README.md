@@ -8,6 +8,8 @@ Features:
 - **Auto-renewal**: A cronjob runs once a week to check if a certificate is due for renewal
 - **Persistent**: The certificate, private key and all settings are preserved over ESXi upgrades
 - **Configurable**: Customizable parameters for renewal interval, Let's Encrypt (ACME) backend, etc
+- **Flexible Challenge Types**: Supports both HTTP-01 and DNS-01 ACME challenges
+- **DNS Provider Support**: Built-in support for popular DNS providers (Cloudflare, AWS Route53, manual)
 
 _Successfully tested with ESXi 6.5, 6.7, 7.0, 8.0._
 
@@ -15,15 +17,80 @@ _Successfully tested with ESXi 6.5, 6.7, 7.0, 8.0._
 
 Many ESXi servers are accessible over the Internet and use self-signed X.509 certificates for TLS connections. This situation not only leads to annoying warnings in the browser when calling the Web UI, but can also be the reason for serious security problems. Despite the enormous popularity of [Let's Encrypt](https://letsencrypt.org), there is no convenient way to automatically request, renew or remove certificates in ESXi.
 
+## Challenge Types
+
+This solution supports two ACME challenge types:
+
+### HTTP-01 Challenge (Default)
+- **Use case**: ESXi servers that are publicly accessible over the Internet
+- **Requirements**: Port 80 must be reachable from the Internet
+- **Pros**: Simple setup, no DNS configuration required
+- **Cons**: Requires public accessibility
+
+### DNS-01 Challenge
+- **Use case**: ESXi servers that are NOT publicly accessible (behind firewalls, private networks)
+- **Requirements**: API access to your DNS provider
+- **Pros**: Works for private/internal servers, supports wildcard certificates
+- **Cons**: Requires DNS provider configuration
+
 ## Prerequisites
 
-Before installing `w2c-letsencrypt-esxi`, ensure the following preconditions are met:
-
+### For HTTP-01 Challenge (Default)
 - Your server is publicly reachable over the Internet
 - A _Fully Qualified Domain Name (FQDN)_ is set in ESXi. Something like `localhost.localdomain` will not work
 - The hostname you specified can be resolved via A and/or AAAA records in the corresponding DNS zone
 
+### For DNS-01 Challenge
+- A _Fully Qualified Domain Name (FQDN)_ is set in ESXi
+- Access to your DNS provider's API (currently supports Cloudflare, AWS Route53, or manual)
+- API credentials for your DNS provider
+
 **Note:** As soon as you install this software, any existing, non Let's Encrypt certificate gets replaced!
+
+## Configuration
+
+Before using DNS-01 challenge, you need to configure your DNS provider:
+
+1. Copy the configuration template:
+   ```bash
+   cp /opt/w2c-letsencrypt/renew.cfg.example /opt/w2c-letsencrypt/renew.cfg
+   ```
+
+2. Edit the configuration file:
+   ```bash
+   vi /opt/w2c-letsencrypt/renew.cfg
+   ```
+
+3. Set your challenge type and DNS provider:
+   ```bash
+   # Challenge type: "http-01" or "dns-01"
+   CHALLENGE_TYPE="dns-01"
+   
+   # DNS Provider: "cloudflare", "route53", or "manual"
+   DNS_PROVIDER="cloudflare"
+   
+   # Cloudflare API Token (for Cloudflare)
+   CF_API_TOKEN="your-cloudflare-api-token"
+   
+   # AWS credentials (for Route53)
+   AWS_ACCESS_KEY_ID="your-access-key"
+   AWS_SECRET_ACCESS_KEY="your-secret-key"
+   ```
+
+### DNS Provider Setup
+
+#### Cloudflare
+1. Create an API token at https://dash.cloudflare.com/profile/api-tokens
+2. Grant the token `Zone:Edit` permissions for your domain
+3. Set `CF_API_TOKEN` in your configuration
+
+#### AWS Route53
+1. Create an IAM user with `Route53:ChangeResourceRecordSets` permissions
+2. Set `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in your configuration
+
+#### Manual DNS
+1. Set `DNS_PROVIDER="manual"`
+2. The script will prompt you to manually create/remove DNS records
 
 ## Install
 
@@ -32,7 +99,7 @@ Before installing `w2c-letsencrypt-esxi`, ensure the following preconditions are
 ### SSH on ESXi
 
 ```bash
-$ wget -O /tmp/w2c-letsencrypt-esxi.vib https://github.com/w2c/letsencrypt-esxi/releases/latest/download/w2c-letsencrypt-esxi.vib
+$ wget -O /tmp/w2c-letsencrypt-esxi.vib https://github.com/kmcbride3/letsencrypt-esxi/releases/latest/download/w2c-letsencrypt-esxi.vib
 
 $ esxcli software vib install -v /tmp/w2c-letsencrypt-esxi.vib -f
 Installation Result
@@ -54,10 +121,10 @@ $ cat /var/log/syslog.log | grep w2c
 
 ### Web UI (= Embedded Host Client)
 
-1. _Storage -> Datastores:_ Use the Datastore browser to upload the [VIB file](https://github.com/w2c/letsencrypt-esxi/releases/latest/download/w2c-letsencrypt-esxi.vib) to a datastore path of your choice.
+1. _Storage -> Datastores:_ Use the Datastore browser to upload the [VIB file](https://github.com/kmcbride3/letsencrypt-esxi/releases/latest/download/w2c-letsencrypt-esxi.vib) to a datastore path of your choice.
 2. _Manage -> Security & users:_ Set the acceptance level of your host to _Community_.
 3. _Manage -> Packages:_ Switch to the list of installed packages, click on _Install update_ and enter the absolute path on the datastore where your just uploaded VIB file resides.
-4. While the VIB is installed, ESXi requests a certificate from Let's Encrypt. If you reload the Web UI afterwards, the newly requested certificate should already be active. If not, see the [Wiki](https://github.com/w2c/letsencrypt-esxi/wiki) for troubleshooting.
+4. While the VIB is installed, ESXi requests a certificate from Let's Encrypt. If you reload the Web UI afterwards, the newly requested certificate should already be active. If not, see the [Wiki](https://github.com/kmcbride3/letsencrypt-esxi/wiki) for troubleshooting.
 
 ### Optional Configuration
 
@@ -175,7 +242,7 @@ vvold is not running.
 
 ## Troubleshooting
 
-See the [Wiki](https://github.com/w2c/letsencrypt-esxi/wiki) for possible pitfalls and solutions.
+See the [Wiki](https://github.com/kmcbride3/letsencrypt-esxi/wiki) for possible pitfalls and solutions.
 
 ## License
 

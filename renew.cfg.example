@@ -1,0 +1,33 @@
+# Let's Encrypt ESXi Configuration File
+# Copy this file to renew.cfg and customize as needed
+
+# Domain configuration
+DOMAIN=$(hostname -f)
+RENEW_DAYS=30
+
+# Challenge type: "http-01" or "dns-01"
+CHALLENGE_TYPE="http-01"
+
+# DNS Provider configuration (only needed for dns-01)
+DNS_PROVIDER=""           # "cloudflare", "route53", "manual"
+DNS_PROPAGATION_WAIT=30   # seconds to wait for DNS propagation
+
+# Cloudflare configuration
+CF_API_TOKEN=""           # Cloudflare API token with Zone:Edit permissions
+
+# AWS Route53 configuration  
+AWS_ACCESS_KEY_ID=""
+AWS_SECRET_ACCESS_KEY=""
+AWS_DEFAULT_REGION="us-east-1"
+
+# Advanced options
+DIRECTORY_URL="https://acme-v02.api.letsencrypt.org/directory"
+CONTACT_EMAIL=""          # Optional: email for Let's Encrypt account
+
+# File paths (usually don't need to change these)
+ACCOUNTKEY="esxi_account.key"
+KEY="esxi.key"
+CSR="esxi.csr"
+CRT="esxi.crt"
+VMWARE_CRT="/etc/vmware/ssl/rui.crt"
+VMWARE_KEY="/etc/vmware/ssl/rui.key"

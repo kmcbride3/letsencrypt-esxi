@@ -13,7 +13,7 @@ LOGGER = logging.getLogger(__name__)
 LOGGER.addHandler(logging.StreamHandler())
 LOGGER.setLevel(logging.INFO)
 
-def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check=False, directory_url=DEFAULT_DIRECTORY_URL, contact=None, check_port=None):
+def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check=False, directory_url=DEFAULT_DIRECTORY_URL, contact=None, check_port=None, challenge_type="http-01", dns_hook=None):
     directory, acct_headers, alg, jwk = None, None, None, None # global variables
 
     # helper functions - base64 encode for jose spec
@@ -69,6 +69,43 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
             time.sleep(0 if result is None else 2)
             result, _, _ = _send_signed_request(url, None, err_msg)
         return result
+
+    # helper function - execute DNS hook script
+    def _execute_dns_hook(action, domain, token, key_auth=None):
+        # Determine DNS hook script path
+        hook_script = dns_hook
+        if hook_script is None:
+            # Default to dns_hook.sh in the same directory as acme_tiny.py
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            hook_script = os.path.join(script_dir, "dns_hook.sh")
+        
+        if not os.path.exists(hook_script):
+            raise ValueError("DNS hook script not found: {0}".format(hook_script))
+        if not os.access(hook_script, os.X_OK):
+            raise ValueError("DNS hook script not executable: {0}".format(hook_script))
+        
+        env = os.environ.copy()
+        env['ACME_CHALLENGE_TYPE'] = challenge_type
+        env['ACME_DOMAIN'] = domain
+        env['ACME_TOKEN'] = token
+        if key_auth:
+            env['ACME_KEY_AUTH'] = key_auth
+            # Calculate the DNS TXT record value
+            env['ACME_TXT_VALUE'] = _b64(hashlib.sha256(key_auth.encode('utf8')).digest())
+        
+        cmd = [hook_script, action, domain, token]
+        if key_auth:
+            cmd.append(key_auth)
+        
+        try:
+            result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
+            if result.returncode != 0:
+                raise IOError("DNS hook failed: {0}".format(result.stderr))
+            return result.stdout
+        except subprocess.TimeoutExpired:
+            raise IOError("DNS hook timed out")
+        except OSError as e:
+            raise IOError("Failed to execute DNS hook: {0}".format(e))
 
     # parse account key to get public key
     log.info("Parsing account key...")
@@ -131,27 +168,53 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
             continue
         log.info("Verifying {0}...".format(domain))
 
-        # find the http-01 challenge and write the challenge file
-        challenge = [c for c in authorization['challenges'] if c['type'] == "http-01"][0]
+        # find the appropriate challenge
+        challenge = None
+        for c in authorization['challenges']:
+            if c['type'] == challenge_type:
+                challenge = c
+                break
+        
+        if challenge is None:
+            raise ValueError("Challenge type {0} not available for domain {1}".format(challenge_type, domain))
+
         token = re.sub(r"[^A-Za-z0-9_\-]", "_", challenge['token'])
         keyauthorization = "{0}.{1}".format(token, thumbprint)
-        wellknown_path = os.path.join(acme_dir, token)
-        with open(wellknown_path, "w") as wellknown_file:
-            wellknown_file.write(keyauthorization)
 
-        # check that the file is in place
-        try:
-            wellknown_url = "http://{0}{1}/.well-known/acme-challenge/{2}".format(domain, "" if check_port is None else ":{0}".format(check_port), token)
-            assert (disable_check or _do_request(wellknown_url)[0] == keyauthorization)
-        except (AssertionError, ValueError) as e:
-            raise ValueError("Wrote file to {0}, but couldn't download {1}: {2}".format(wellknown_path, wellknown_url, e))
+        if challenge_type == "http-01":
+            # HTTP-01 challenge (existing logic)
+            wellknown_path = os.path.join(acme_dir, token)
+            with open(wellknown_path, "w") as wellknown_file:
+                wellknown_file.write(keyauthorization)
+
+            # check that the file is in place
+            try:
+                wellknown_url = "http://{0}{1}/.well-known/acme-challenge/{2}".format(domain, "" if check_port is None else ":{0}".format(check_port), token)
+                assert (disable_check or _do_request(wellknown_url)[0] == keyauthorization)
+            except (AssertionError, ValueError) as e:
+                raise ValueError("Wrote file to {0}, but couldn't download {1}: {2}".format(wellknown_path, wellknown_url, e))
+
+        elif challenge_type == "dns-01":
+            # DNS-01 challenge
+            log.info("Setting up DNS challenge for {0}...".format(domain))
+            _execute_dns_hook("setup", domain, token, keyauthorization)
+            log.info("DNS challenge setup complete. Waiting for propagation...")
+            # Wait for DNS propagation
+            time.sleep(30)  # Basic wait, can be made configurable
 
         # say the challenge is done
         _send_signed_request(challenge['url'], {}, "Error submitting challenges: {0}".format(domain))
         authorization = _poll_until_not(auth_url, ["pending"], "Error checking challenge status for {0}".format(domain))
+        
+        # cleanup
+        if challenge_type == "http-01":
+            os.remove(wellknown_path)
+        elif challenge_type == "dns-01":
+            log.info("Cleaning up DNS challenge for {0}...".format(domain))
+            _execute_dns_hook("cleanup", domain, token, keyauthorization)
+
         if authorization['status'] != "valid":
             raise ValueError("Challenge did not pass for {0}: {1}".format(domain, authorization))
-        os.remove(wellknown_path)
         log.info("{0} verified!".format(domain))
 
     # finalize the order with the csr
@@ -174,15 +237,17 @@ def main(argv=None):
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=textwrap.dedent("""\
             This script automates the process of getting a signed TLS certificate from Let's Encrypt using the ACME protocol.
-            It will need to be run on your server and have access to your private account key, so PLEASE READ THROUGH IT!
-            It's only ~200 lines, so it won't take long.
-
-            Example Usage: python acme_tiny.py --account-key ./account.key --csr ./domain.csr --acme-dir /usr/share/nginx/html/.well-known/acme-challenge/ > signed_chain.crt
+            It supports both HTTP-01 and DNS-01 challenge types.
+            
+            For HTTP-01: python acme_tiny.py --account-key ./account.key --csr ./domain.csr --acme-dir /usr/share/nginx/html/.well-known/acme-challenge/
+            For DNS-01: python acme_tiny.py --account-key ./account.key --csr ./domain.csr --challenge-type dns-01
             """)
     )
     parser.add_argument("--account-key", required=True, help="path to your Let's Encrypt account private key")
     parser.add_argument("--csr", required=True, help="path to your certificate signing request")
-    parser.add_argument("--acme-dir", required=True, help="path to the .well-known/acme-challenge/ directory")
+    parser.add_argument("--acme-dir", help="path to the .well-known/acme-challenge/ directory (required for http-01)")
+    parser.add_argument("--challenge-type", default="http-01", choices=["http-01", "dns-01"], help="challenge type to use")
+    parser.add_argument("--dns-hook", help="path to DNS hook script (optional, defaults to dns_hook.sh in same directory)")
     parser.add_argument("--quiet", action="store_const", const=logging.ERROR, help="suppress output except for errors")
     parser.add_argument("--disable-check", default=False, action="store_true", help="disable checking if the challenge file is hosted correctly before telling the CA")
     parser.add_argument("--directory-url", default=DEFAULT_DIRECTORY_URL, help="certificate authority directory url, default is Let's Encrypt")
@@ -191,8 +256,16 @@ def main(argv=None):
     parser.add_argument("--check-port", metavar="PORT", default=None, help="what port to use when self-checking the challenge file, default is port 80")
 
     args = parser.parse_args(argv)
+    
+    # Validate arguments
+    if args.challenge_type == "http-01" and not args.acme_dir:
+        parser.error("--acme-dir is required for http-01 challenge")
+    
     LOGGER.setLevel(args.quiet or LOGGER.level)
-    signed_crt = get_crt(args.account_key, args.csr, args.acme_dir, log=LOGGER, CA=args.ca, disable_check=args.disable_check, directory_url=args.directory_url, contact=args.contact, check_port=args.check_port)
+    signed_crt = get_crt(args.account_key, args.csr, args.acme_dir, log=LOGGER, CA=args.ca, 
+                        disable_check=args.disable_check, directory_url=args.directory_url, 
+                        contact=args.contact, check_port=args.check_port, 
+                        challenge_type=args.challenge_type, dns_hook=args.dns_hook)
     sys.stdout.write(signed_crt)
 
 if __name__ == "__main__": # pragma: no cover

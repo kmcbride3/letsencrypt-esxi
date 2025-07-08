@@ -45,7 +45,7 @@ cp ../* ${BIN_DIR} 2>/dev/null
 cp ../w2c-letsencrypt ${INIT_DIR}
 
 # Ensure that shell scripts are executable
-chmod +x ${INIT_DIR}/w2c-letsencrypt ${BIN_DIR}/renew.sh
+chmod +x ${INIT_DIR}/w2c-letsencrypt ${BIN_DIR}/renew.sh ${BIN_DIR}/dns_hook.sh ${BIN_DIR}/test_dns.sh
 
 # Create tgz with payload
 tar czf ${TEMP_DIR}/payload1 -C ${VIB_PAYLOAD_DIR} etc opt
