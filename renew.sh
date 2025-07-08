@@ -108,7 +108,6 @@ fi
 openssl genrsa -out "$KEY" 4096
 openssl req -new -sha256 -key "$KEY" -subj "/CN=$DOMAIN" -config "./openssl.cnf" > "$CSR"
 chmod 0400 "$ACCOUNTKEY" "$KEY"
-HTTP_SERVER_PID=$!
 
 # Retrieve the certificate
 export SSL_CERT_FILE
