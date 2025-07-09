@@ -76,50 +76,23 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
 
     # helper function - execute DNS hook script
     def _execute_dns_hook(action, domain, token, key_auth=None):
-        # Determine DNS hook script path
-        hook_script = dns_hook
-        if hook_script is None:
-            # Default to dns_hook.sh in the same directory as acme_tiny.py
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            hook_script = os.path.join(script_dir, "dns_hook.sh")
-        
-        if not os.path.exists(hook_script):
-            raise ValueError("DNS hook script not found: {0}".format(hook_script))
-        if not os.access(hook_script, os.X_OK):
-            raise ValueError("DNS hook script not executable: {0}".format(hook_script))
+        hook_script = dns_hook or os.path.join(os.path.dirname(os.path.abspath(__file__)), "dns_hook.sh")
+        if not os.path.exists(hook_script) or not os.access(hook_script, os.X_OK):
+            raise ValueError("DNS hook script not found or not executable: {0}".format(hook_script))
         
         env = os.environ.copy()
-        env['ACME_CHALLENGE_TYPE'] = challenge_type
-        env['ACME_DOMAIN'] = domain
-        env['ACME_TOKEN'] = token
+        env.update({'ACME_CHALLENGE_TYPE': challenge_type, 'ACME_DOMAIN': domain, 'ACME_TOKEN': token})
         if key_auth:
-            env['ACME_KEY_AUTH'] = key_auth
-            # Calculate the DNS TXT record value
-            env['ACME_TXT_VALUE'] = _b64(hashlib.sha256(key_auth.encode('utf8')).digest())
+            env.update({'ACME_KEY_AUTH': key_auth, 'ACME_TXT_VALUE': _b64(hashlib.sha256(key_auth.encode('utf8')).digest())})
         
-        cmd = [hook_script, action, domain, token]
-        if key_auth:
-            cmd.append(key_auth)
+        cmd = [hook_script, action, domain, token] + ([key_auth] if key_auth else [])
+        proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stdout, stderr = proc.communicate()
         
-        try:
-            proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            stdout, stderr = proc.communicate()
-            
-            if proc.returncode != 0:
-                try:
-                    error_msg = stderr.decode('utf8')
-                except UnicodeDecodeError:
-                    error_msg = stderr.decode('utf8', errors='replace')
-                except Exception:
-                    error_msg = str(stderr)
-                raise IOError("DNS hook failed: {0}".format(error_msg))
-            
-            try:
-                return stdout.decode('utf8')
-            except UnicodeDecodeError:
-                return stdout.decode('utf8', errors='replace')
-        except OSError as e:
-            raise IOError("Failed to execute DNS hook: {0}".format(e))
+        if proc.returncode != 0:
+            error_msg = stderr.decode('utf8', errors='replace')
+            raise IOError("DNS hook failed: {0}".format(error_msg))
+        return stdout.decode('utf8', errors='replace')
 
     # parse account key to get public key
     log.info("Parsing account key...")
@@ -214,7 +187,8 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
             _execute_dns_hook("setup", domain, token, keyauthorization)
             log.info("DNS challenge setup complete. Waiting for propagation...")
             # Wait for DNS propagation
-            time.sleep(30)  # Basic wait, can be made configurable
+            wait_time = int(os.getenv('DNS_PROPAGATION_WAIT', '30'))
+            time.sleep(wait_time)
 
         # say the challenge is done
         _send_signed_request(challenge['url'], {}, "Error submitting challenges: {0}".format(domain))
@@ -249,13 +223,7 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
 def main(argv=None):
     parser = argparse.ArgumentParser(
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description=textwrap.dedent("""\
-            This script automates the process of getting a signed TLS certificate from Let's Encrypt using the ACME protocol.
-            It supports both HTTP-01 and DNS-01 challenge types.
-            
-            For HTTP-01: python acme_tiny.py --account-key ./account.key --csr ./domain.csr --acme-dir /usr/share/nginx/html/.well-known/acme-challenge/
-            For DNS-01: python acme_tiny.py --account-key ./account.key --csr ./domain.csr --challenge-type dns-01
-            """)
+        description="Get a signed TLS certificate from Let's Encrypt using ACME protocol. Supports HTTP-01 and DNS-01 challenges."
     )
     parser.add_argument("--account-key", required=True, help="path to your Let's Encrypt account private key")
     parser.add_argument("--csr", required=True, help="path to your certificate signing request")
@@ -270,8 +238,6 @@ def main(argv=None):
     parser.add_argument("--check-port", metavar="PORT", default=None, help="what port to use when self-checking the challenge file, default is port 80")
 
     args = parser.parse_args(argv)
-    
-    # Validate arguments
     if args.challenge_type == "http-01" and not args.acme_dir:
         parser.error("--acme-dir is required for http-01 challenge")
     

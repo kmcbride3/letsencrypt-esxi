@@ -45,7 +45,7 @@ cp ../* ${BIN_DIR} 2>/dev/null
 cp ../w2c-letsencrypt ${INIT_DIR}
 
 # Fix line endings for shell scripts (convert Windows CRLF to Unix LF)
-for script in renew.sh dns_hook.sh test_dns.sh test_system.sh test_cloudflare_api.sh test_domain_extraction.sh; do
+for script in renew.sh dns_hook.sh test_dns.sh test_system.sh; do
     if [ -f "${BIN_DIR}/${script}" ]; then
         sed -i 's/\r$//' "${BIN_DIR}/${script}" 2>/dev/null || true
     fi

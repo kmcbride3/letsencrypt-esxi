@@ -181,6 +181,7 @@ chmod 0400 "$ACCOUNTKEY" "$KEY"
 
 # Retrieve the certificate
 export SSL_CERT_FILE
+export DNS_PROPAGATION_WAIT
 
 if [ "$CHALLENGE_TYPE" = "http-01" ]; then
   CERT=$(python ./acme_tiny.py --account-key "$ACCOUNTKEY" --csr "$CSR" --acme-dir "$ACMEDIR" --directory-url "$DIRECTORY_URL" --challenge-type "$CHALLENGE_TYPE")
