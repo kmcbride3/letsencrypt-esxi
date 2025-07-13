@@ -99,57 +99,14 @@ Before using DNS-01 challenge, you need to configure your DNS provider:
    vi /opt/w2c-letsencrypt/renew.cfg
    ```
 
-4. **Set your challenge type and DNS provider credentials:**
+4. **Set your challenge type and DNS provider credentials:** Example below shows minimum required configuration for Cloudflare
 
    ```ini
-   # Challenge type: "http-01" or "dns-01"
    CHALLENGE_TYPE="dns-01"
 
-   # DNS Provider
-   # Supported options include:
-   # "cloudflare", "route53", "digitalocean", "namecheap", "godaddy",
-   # "powerdns", "duckdns", "ns1", "gcloud", "azure", "manual"
    DNS_PROVIDER="cloudflare"
 
-   # Provider-specific credentials (uncomment and configure as needed):
-
-   # Cloudflare
    CF_API_TOKEN="your-cloudflare-api-token"
-
-   # AWS Route53
-   AWS_ACCESS_KEY_ID="your-access-key"
-   AWS_SECRET_ACCESS_KEY="your-secret-key"
-
-   # DigitalOcean
-   DO_API_TOKEN="your-digitalocean-api-token"
-
-   # Namecheap
-   NAMECHEAP_API_USER="your-api-user"
-   NAMECHEAP_API_KEY="your-api-key"
-   NAMECHEAP_USERNAME="your-username"
-
-   # GoDaddy
-   GODADDY_API_KEY="your-api-key"
-   GODADDY_API_SECRET="your-api-secret"
-
-   # DuckDNS
-   DUCKDNS_TOKEN="your-duckdns-token"
-
-   # PowerDNS
-   POWERDNS_API_URL="https://your-powerdns-server:8081"
-   POWERDNS_API_KEY="your-api-key"
-
-   # NS1
-   NS1_API_KEY="your-ns1-api-key"
-
-   # Google Cloud DNS
-   GCLOUD_SERVICE_ACCOUNT_FILE="/path/to/service-account-key.json"
-
-   # Azure DNS
-   AZURE_CLIENT_ID="your-client-id"
-   AZURE_CLIENT_SECRET="your-client-secret"
-   AZURE_TENANT_ID="your-tenant-id"
-   AZURE_SUBSCRIPTION_ID="your-subscription-id"
    ```
 
 ## Install
@@ -199,6 +156,17 @@ vi /opt/w2c-letsencrypt/renew.cfg
 Example configuration showing key settings you can customize. All settings are commented out (using `#`) to match the template - uncomment and modify as needed:
 
 ```ini
+# Let's Encrypt ESXi Configuration Template
+#
+# USAGE:
+# 1. Copy this file: cp renew.cfg.example renew.cfg
+# 2. Edit renew.cfg and uncomment/configure settings as needed
+# 3. For HTTP-01 (default): No configuration required - works out of the box
+# 4. For DNS-01: Uncomment CHALLENGE_TYPE, DNS_PROVIDER, and provider credentials
+#
+# This file is safe to use as-is with default HTTP-01 behavior.
+# All non-default settings are commented out to prevent configuration errors.
+
 # =============================================================================
 # LET'S ENCRYPT SETTINGS
 # =============================================================================
@@ -208,7 +176,7 @@ Example configuration showing key settings you can customize. All settings are c
 
 # Certificate renewal interval in days (default: 30)
 # Certificates are renewed this many days before expiration
-#RENEW_DAYS=30
+#RENEW_DAYS=14
 
 # Domain name for certificate (default: uses ESXi hostname)
 # Override only if hostname doesn't match desired certificate domain
@@ -244,11 +212,11 @@ Example configuration showing key settings you can customize. All settings are c
 
 # Cloudflare
 # Create an API token at https://dash.cloudflare.com/profile/api-tokens with Zone:Edit permissions
-#CF_API_TOKEN=""
+#CF_API_TOKEN="your-cloudflare-api-token"
 
 # OR use Global API Key (legacy method)
-# #CF_API_KEY=""
-# #CF_EMAIL=""
+# #CF_API_KEY="your-cloudflare-api-key"
+# #CF_EMAIL="your-cloudflare-account-email"
 
 # Cloudflare-specific settings
 #CF_TTL=120                      # TTL for DNS records (seconds)
@@ -256,8 +224,8 @@ Example configuration showing key settings you can customize. All settings are c
 
 # Amazon Route53
 # Create an IAM user on AWS with Route53:ChangeResourceRecordSets permissions
-#AWS_ACCESS_KEY_ID=""
-#AWS_SECRET_ACCESS_KEY=""
+#AWS_ACCESS_KEY_ID="your-access-key"
+#AWS_SECRET_ACCESS_KEY="your-secret-key"
 #AWS_DEFAULT_REGION="us-east-1"
 
 # Route53-specific settings
@@ -270,41 +238,41 @@ Example configuration showing key settings you can customize. All settings are c
 
 # Azure DNS
 # Create a service principal with DNS Zone Contributor role
-#AZURE_CLIENT_ID=""
-#AZURE_CLIENT_SECRET=""
-#AZURE_TENANT_ID=""
-#AZURE_SUBSCRIPTION_ID=""
+#AZURE_CLIENT_ID="your-azure-client-id"
+#AZURE_CLIENT_SECRET="your-azure-client-secret"
+#AZURE_TENANT_ID="your-azure-tenant-id"
+#AZURE_SUBSCRIPTION_ID="your-azure-subscription-id"
 
 # DigitalOcean
 # Create an API token at https://cloud.digitalocean.com/account/api/tokens
-#DO_API_TOKEN=""
+#DO_API_TOKEN="your-digitalocean-api-token"
 
 # DigitalOcean-specific settings
 #DO_TTL=120                      # TTL for DNS records (seconds)
 
 # Namecheap
 # Enable API access in account settings and whitelist your ESXi server's IP address
-#NAMECHEAP_API_USER=""
-#NAMECHEAP_API_KEY=""
-#NAMECHEAP_USERNAME=""
+#NAMECHEAP_API_USER="your-namecheap-api-user"
+#NAMECHEAP_API_KEY="your-namecheap-api-key"
+#NAMECHEAP_USERNAME="your-namecheap-username"
 
 # GoDaddy
 # Create API credentials at https://developer.godaddy.com/keys
-#GODADDY_API_KEY=""
-#GODADDY_API_SECRET=""
+#GODADDY_API_KEY="your-godaddy-api-key"
+#GODADDY_API_SECRET="your-godaddy-api-secret"
 
 # PowerDNS
 # Enable the PowerDNS API on your authoritative server
 #POWERDNS_API_URL="https://your-powerdns-server:8081"
-#POWERDNS_API_KEY=""
+#POWERDNS_API_KEY="your-powerdns-api-key"
 
 # DuckDNS
 # Create a free account at https://www.duckdns.org (only works for *.duckdns.org domains)
-#DUCKDNS_TOKEN=""
+#DUCKDNS_TOKEN="your-duckdns-token"
 
 # NS1
 # Create an API key at https://my.nsone.net/#/account/settings with DNS record management permissions
-#NS1_API_KEY=""
+#NS1_API_KEY="your-ns1-api-key"
 
 # =============================================================================
 # ADVANCED SETTINGS (rarely need to change)
@@ -317,6 +285,8 @@ Example configuration showing key settings you can customize. All settings are c
 #CRT="esxi.crt"
 #VMWARE_CRT="/etc/vmware/ssl/rui.crt"
 #VMWARE_KEY="/etc/vmware/ssl/rui.key"
+
+# =============================================================================
 ```
 
 To apply your modifications, run `/etc/init.d/w2c-letsencrypt start`
