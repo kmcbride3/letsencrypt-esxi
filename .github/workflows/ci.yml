@@ -28,9 +28,16 @@ jobs:
       - name: Test shell script syntax
         run: |
           bash -n renew.sh
-          bash -n dns_hook.sh
+          bash -n dnsapi/dns_api.sh
           bash -n test_dns.sh
           bash -n test_system.sh
+          # Test all DNS provider scripts
+          for dns_script in dnsapi/dns_*.sh; do
+            if [ "$dns_script" != "dnsapi/dns_api.sh" ] && [ -f "$dns_script" ]; then
+              echo "Testing syntax: $dns_script"
+              bash -n "$dns_script"
+            fi
+          done
           echo "✓ Shell script syntax validation passed"
 
   build:
@@ -55,19 +62,19 @@ jobs:
             mkdir -p /tmp/vib-check
             cd /tmp/vib-check
             ar x "$GITHUB_WORKSPACE/artifacts/w2c-letsencrypt-esxi.vib"
-            
+
             # Verify key files are in the payload
             echo "Checking VIB payload contents:"
-            tar -tzf payload1 | grep -E "(dns_hook\.sh|test_.*\.sh|acme_tiny\.py|renew\.sh)" || true
-            
+            tar -tzf payload1 | grep -E "(dns_api\.sh|test_.*\.sh|acme_tiny\.py|renew\.sh)" || true
+
             # Verify DNS hook is executable in payload
-            if tar -tzf payload1 | grep -q "opt/w2c-letsencrypt/dns_hook.sh"; then
+            if tar -tzf payload1 | grep -q "opt/w2c-letsencrypt/dnsapi/dns_api.sh"; then
               echo "✓ DNS hook script included in VIB"
             else
               echo "✗ DNS hook script missing from VIB"
               exit 1
             fi
-            
+
             if tar -tzf payload1 | grep -q "opt/w2c-letsencrypt/test_system.sh"; then
               echo "✓ Test scripts included in VIB"
             else
@@ -116,34 +123,34 @@ jobs:
           - **Multi-Provider DNS Support**: Cloudflare, AWS Route53, and manual DNS providers
           - **Comprehensive Testing**: Built-in validation scripts for system readiness
           - **Automatic DNS Hook Discovery**: Simplified configuration with sensible defaults
-          
+
           ## 📦 Quick Installation
-          
+
           ### SSH Installation (Recommended)
           \`\`\`bash
           wget -O /tmp/w2c-letsencrypt-esxi.vib https://github.com/${{ github.repository }}/releases/download/${VERSION}/w2c-letsencrypt-esxi.vib
           esxcli software vib install -v /tmp/w2c-letsencrypt-esxi.vib -f --no-sig-check
           \`\`\`
-          
+
           ### Web UI Installation
           1. Download the VIB file below
           2. Upload to datastore via ESXi web interface
           3. Install via Manage → Packages
-          
+
           ## ⚙️ DNS-01 Configuration (New!)
-          
+
           For private ESXi servers, configure DNS challenges:
           \`\`\`bash
           cd /opt/w2c-letsencrypt/
           cp renew.cfg.example renew.cfg
           vi renew.cfg
-          
+
           # Configure for your DNS provider
           CHALLENGE_TYPE="dns-01"
           DNS_PROVIDER="cloudflare"
           CF_API_TOKEN="your-cloudflare-api-token"
           \`\`\`
-          
+
           ## 🧪 Testing Your Setup
           \`\`\`bash
           cd /opt/w2c-letsencrypt/
@@ -151,22 +158,22 @@ jobs:
           ./test_dns.sh       # Test DNS provider setup
           ./renew.sh          # Run certificate renewal
           \`\`\`
-          
+
           ## 📋 Compatibility
           - ESXi versions: 6.5, 6.7, 7.0, 8.0
           - Challenge types: HTTP-01 (existing) + DNS-01 (new)
           - DNS providers: Cloudflare, AWS Route53, Manual
-          
+
           ## 🔄 Upgrading
           No breaking changes - existing HTTP-01 configurations continue to work.
           EOF
           \`\`\`
-          
+
           ## 📋 Compatibility
           - ESXi versions: 6.5, 6.7, 7.0, 8.0
           - Challenge types: HTTP-01 (existing) + DNS-01 (new)
           - DNS providers: Cloudflare, AWS Route53, Manual
-          
+
           ## 🔄 Upgrading
           No breaking changes - existing HTTP-01 configurations continue to work.
           EOF

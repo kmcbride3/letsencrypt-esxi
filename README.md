@@ -2,14 +2,18 @@
 
 `w2c-letsencrypt-esxi` is a lightweight open-source solution to automatically obtain and renew Let's Encrypt certificates on standalone VMware ESXi servers. Packaged as a _VIB archive_ or _Offline Bundle_, install/upgrade/removal is possible directly via the web UI or, alternatively, with just a few SSH commands.
 
-Features:
+## Key Features
 
 - **Fully-automated**: Requesting and renewing certificates without user interaction
 - **Auto-renewal**: A cronjob runs once a week to check if a certificate is due for renewal
 - **Persistent**: The certificate, private key and all settings are preserved over ESXi upgrades
 - **Configurable**: Customizable parameters for renewal interval, Let's Encrypt (ACME) backend, etc
 - **Flexible Challenge Types**: Supports both HTTP-01 and DNS-01 ACME challenges
-- **DNS Provider Support**: Built-in support for popular DNS providers (Cloudflare, AWS Route53, manual)
+- **DNS-01 Support**: Multiple DNS providers supported (Cloudflare, Route53, DigitalOcean, Namecheap, GoDaddy, PowerDNS, DuckDNS, NS1, Google Cloud DNS, Azure DNS, Manual)
+- **Robust Error Handling**: Exponential backoff retry logic with permanent vs. transient error detection
+- **Advanced DNS Features**: Multi-resolver propagation checking, authoritative nameserver validation
+- **Performance Optimized**: Intelligent caching system and rate limiting protection
+- **ESXi Optimized**: Designed specifically for ESXi 6.5+ BusyBox shell environment
 
 _Successfully tested with ESXi 6.5, 6.7, 7.0, 8.0._
 
@@ -22,12 +26,14 @@ Many ESXi servers are accessible over the Internet and use self-signed X.509 cer
 This solution supports two ACME challenge types:
 
 ### HTTP-01 Challenge (Default)
+
 - **Use case**: ESXi servers that are publicly accessible over the Internet
 - **Requirements**: Port 80 must be reachable from the Internet
 - **Pros**: Simple setup, no DNS configuration required
 - **Cons**: Requires public accessibility
 
 ### DNS-01 Challenge
+
 - **Use case**: ESXi servers that are NOT publicly accessible (behind firewalls, private networks)
 - **Requirements**: API access to your DNS provider
 - **Pros**: Works for private/internal servers, supports wildcard certificates
@@ -35,19 +41,21 @@ This solution supports two ACME challenge types:
 
 ## Prerequisites
 
+**Important Note**: ESXi servers use self-signed certificates by default (often using a non-FQDN hostname, such as `localhost.localdomain`). The requirement for a real domain name is a Let's Encrypt policy limitation, not a technical ESXi requirement. Let's Encrypt does not currently support certificates for localhost or IP addresses, though [RFC 8738](https://www.rfc-editor.org/rfc/rfc8738) support was planned but has been indefinitely shelved.
+
 ### For HTTP-01 Challenge (Default)
+
 - Your server is publicly reachable over the Internet
-- A _Fully Qualified Domain Name (FQDN)_ is set in ESXi. Something like `localhost.localdomain` will not work
+- A _Fully Qualified Domain Name (FQDN)_ is set in ESXi
 - The hostname you specified can be resolved via A and/or AAAA records in the corresponding DNS zone
 
 ### For DNS-01 Challenge
-- A _Fully Qualified Domain Name (FQDN)_ is set in ESXi
-- Access to your DNS provider's API (currently supports Cloudflare, AWS Route53, or manual)
+
+- A _Fully Qualified Domain Name (FQDN)_ is set in ESXi (does not need to be publicly accessible)
+- Access to your DNS provider's API (see supported providers above)
 - API credentials for your DNS provider
 
 **Note:** As soon as you install this software, any existing, non Let's Encrypt certificate gets replaced!
-
-## Configuration
 
 For **HTTP-01 challenge**: No configuration is required - the system works out of the box with secure defaults.
 
@@ -57,46 +65,92 @@ For **DNS-01 challenge**: You must create a `renew.cfg` file to configure your D
 
 Before using DNS-01 challenge, you need to configure your DNS provider:
 
-1. Copy the configuration template:
+1. **Set up your DNS provider credentials:**
+
+   **Cloudflare:** Create an API token at <https://dash.cloudflare.com/profile/api-tokens> with `Zone:Edit` permissions
+
+   **AWS Route53:** Create an IAM user with `Route53:ChangeResourceRecordSets` permissions
+
+   **DigitalOcean:** Create an API token at <https://cloud.digitalocean.com/account/api/tokens> with read/write permissions
+
+   **Namecheap:** Enable API access in account settings and whitelist your ESXi server's IP address
+
+   **GoDaddy:** Create API credentials at <https://developer.godaddy.com/keys>
+
+   **PowerDNS:** Enable the PowerDNS API on your authoritative server
+
+   **DuckDNS:** Create a free account at <https://www.duckdns.org> (only works for `*.duckdns.org` domains)
+
+   **NS1:** Create an API key at <https://my.nsone.net/#/account/settings> with DNS record management permissions
+
+   **Google Cloud DNS:** Create a service account with DNS Administrator role and download the key file
+
+   **Azure DNS:** Create a service principal with DNS Zone Contributor role
+
+2. **Copy the configuration template:**
+
    ```shellsession
    cp /opt/w2c-letsencrypt/renew.cfg.example /opt/w2c-letsencrypt/renew.cfg
    ```
 
-2. Edit the configuration file:
+3. **Edit the configuration file:**
+
    ```shellsession
    vi /opt/w2c-letsencrypt/renew.cfg
    ```
 
-3. Set your challenge type and DNS provider:
+4. **Set your challenge type and DNS provider credentials:**
+
    ```ini
    # Challenge type: "http-01" or "dns-01"
    CHALLENGE_TYPE="dns-01"
-   
-   # DNS Provider: "cloudflare", "route53", or "manual"
+
+   # DNS Provider
+   # Supported options include:
+   # "cloudflare", "route53", "digitalocean", "namecheap", "godaddy",
+   # "powerdns", "duckdns", "ns1", "gcloud", "azure", "manual"
    DNS_PROVIDER="cloudflare"
-   
-   # Cloudflare API Token (for Cloudflare)
+
+   # Provider-specific credentials (uncomment and configure as needed):
+
+   # Cloudflare
    CF_API_TOKEN="your-cloudflare-api-token"
-   
-   # AWS credentials (for Route53)
+
+   # AWS Route53
    AWS_ACCESS_KEY_ID="your-access-key"
    AWS_SECRET_ACCESS_KEY="your-secret-key"
+
+   # DigitalOcean
+   DO_API_TOKEN="your-digitalocean-api-token"
+
+   # Namecheap
+   NAMECHEAP_API_USER="your-api-user"
+   NAMECHEAP_API_KEY="your-api-key"
+   NAMECHEAP_USERNAME="your-username"
+
+   # GoDaddy
+   GODADDY_API_KEY="your-api-key"
+   GODADDY_API_SECRET="your-api-secret"
+
+   # DuckDNS
+   DUCKDNS_TOKEN="your-duckdns-token"
+
+   # PowerDNS
+   POWERDNS_API_URL="https://your-powerdns-server:8081"
+   POWERDNS_API_KEY="your-api-key"
+
+   # NS1
+   NS1_API_KEY="your-ns1-api-key"
+
+   # Google Cloud DNS
+   GCLOUD_SERVICE_ACCOUNT_FILE="/path/to/service-account-key.json"
+
+   # Azure DNS
+   AZURE_CLIENT_ID="your-client-id"
+   AZURE_CLIENT_SECRET="your-client-secret"
+   AZURE_TENANT_ID="your-tenant-id"
+   AZURE_SUBSCRIPTION_ID="your-subscription-id"
    ```
-
-### DNS Provider Setup
-
-#### Cloudflare
-1. Create an API token at https://dash.cloudflare.com/profile/api-tokens
-2. Grant the token `Zone:Edit` permissions for your domain
-3. Set `CF_API_TOKEN` in your configuration
-
-#### AWS Route53
-1. Create an IAM user with `Route53:ChangeResourceRecordSets` permissions
-2. Set `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in your configuration
-
-#### Manual DNS
-1. Set `DNS_PROVIDER="manual"`
-2. The script will prompt you to manually create/remove DNS records
 
 ## Install
 
@@ -142,29 +196,127 @@ cp /opt/w2c-letsencrypt/renew.cfg.example /opt/w2c-letsencrypt/renew.cfg
 vi /opt/w2c-letsencrypt/renew.cfg
 ```
 
-Example configuration for testing against the [staging environment](https://letsencrypt.org/docs/staging-environment/) of Let's Encrypt or adjusting renewal intervals:
+Example configuration showing key settings you can customize. All settings are commented out (using `#`) to match the template - uncomment and modify as needed:
 
 ```ini
-# OPTIONAL SETTINGS (both HTTP-01 and DNS-01)
-# Request a certificate from the staging environment (default: production)
-DIRECTORY_URL="https://acme-staging-v02.api.letsencrypt.org/directory"
+# =============================================================================
+# LET'S ENCRYPT SETTINGS
+# =============================================================================
+# Let's Encrypt server URL (default: production)
+# Uncomment below line for staging/testing (issues test certificates)
+#DIRECTORY_URL="https://acme-staging-v02.api.letsencrypt.org/directory"
 
-# Set the renewal interval to 15 days (default: 30)
-RENEW_DAYS=15
+# Certificate renewal interval in days (default: 30)
+# Certificates are renewed this many days before expiration
+#RENEW_DAYS=30
 
-# REQUIRED SETTINGS (DNS-01 only)
+# Domain name for certificate (default: uses ESXi hostname)
+# Override only if hostname doesn't match desired certificate domain
+#DOMAIN=$(hostname -f)
+
 # Challenge type: "http-01" or "dns-01" (default: "http-01")
-CHALLENGE_TYPE="dns-01"
+#CHALLENGE_TYPE="dns-01"
 
-# DNS Provider: "cloudflare", "route53", or "manual" (required for DNS-01)
-DNS_PROVIDER="cloudflare"
+# =============================================================================
+# DNS PROVIDER CONFIGURATION (Required for DNS-01)
+# =============================================================================
+# Primary DNS provider - choose one:
+# Supported: cloudflare, route53, digitalocean, namecheap, godaddy, powerdns,
+#           duckdns, ns1, gcloud, azure, manual
+#DNS_PROVIDER="cloudflare"
 
-# Cloudflare API Token (required for Cloudflare DNS-01)
-CF_API_TOKEN="your-cloudflare-api-token"
+# ⚠️  WARNING: The "manual" provider requires user interaction and will NOT work
+#    with automated renewals (cron jobs). Use only for testing or one-time
+#    certificate generation. For production ESXi deployments, use an automated
+#    provider like cloudflare, route53, gcloud, azure, etc.
 
-# OPTIONAL SETTINGS (DNS-01 only)
-# Adjust DNS propagation wait time (default: 30 seconds)
-DNS_PROPAGATION_WAIT=60
+# DNS challenge settings
+#DNS_PROPAGATION_WAIT=120        # Seconds to wait for DNS propagation
+#DNS_PROPAGATION_CHECK=1         # Enable active DNS propagation checking (1) or use fixed wait (0)
+#DNS_TIMEOUT=30                  # API request timeout in seconds
+#MAX_RETRIES=3                   # Maximum retry attempts for failed API calls
+#RETRY_DELAY=5                   # Base delay between retries (exponential backoff)
+#DEBUG=0                         # Enable debug logging (0=off, 1=on)
+#DNS_CACHE_TTL=120               # Cache TTL in seconds (2 minutes for ESXi)
+
+# DNS provider-specific settings
+# Uncomment and configure the provider you want to use
+
+# Cloudflare
+# Create an API token at https://dash.cloudflare.com/profile/api-tokens with Zone:Edit permissions
+#CF_API_TOKEN=""
+
+# OR use Global API Key (legacy method)
+# #CF_API_KEY=""
+# #CF_EMAIL=""
+
+# Cloudflare-specific settings
+#CF_TTL=120                      # TTL for DNS records (seconds)
+#CF_PROXY=false                  # Enable Cloudflare proxy for records (true/false)
+
+# Amazon Route53
+# Create an IAM user on AWS with Route53:ChangeResourceRecordSets permissions
+#AWS_ACCESS_KEY_ID=""
+#AWS_SECRET_ACCESS_KEY=""
+#AWS_DEFAULT_REGION="us-east-1"
+
+# Route53-specific settings
+#R53_TTL=120                     # TTL for DNS records (seconds)
+#R53_HOSTED_ZONE_ID=""          # Optional: specify zone ID directly
+
+# Google Cloud DNS
+# Create a service account with DNS Administrator role and download the key file
+#GCLOUD_SERVICE_ACCOUNT_FILE="/path/to/service-account-key.json"
+
+# Azure DNS
+# Create a service principal with DNS Zone Contributor role
+#AZURE_CLIENT_ID=""
+#AZURE_CLIENT_SECRET=""
+#AZURE_TENANT_ID=""
+#AZURE_SUBSCRIPTION_ID=""
+
+# DigitalOcean
+# Create an API token at https://cloud.digitalocean.com/account/api/tokens
+#DO_API_TOKEN=""
+
+# DigitalOcean-specific settings
+#DO_TTL=120                      # TTL for DNS records (seconds)
+
+# Namecheap
+# Enable API access in account settings and whitelist your ESXi server's IP address
+#NAMECHEAP_API_USER=""
+#NAMECHEAP_API_KEY=""
+#NAMECHEAP_USERNAME=""
+
+# GoDaddy
+# Create API credentials at https://developer.godaddy.com/keys
+#GODADDY_API_KEY=""
+#GODADDY_API_SECRET=""
+
+# PowerDNS
+# Enable the PowerDNS API on your authoritative server
+#POWERDNS_API_URL="https://your-powerdns-server:8081"
+#POWERDNS_API_KEY=""
+
+# DuckDNS
+# Create a free account at https://www.duckdns.org (only works for *.duckdns.org domains)
+#DUCKDNS_TOKEN=""
+
+# NS1
+# Create an API key at https://my.nsone.net/#/account/settings with DNS record management permissions
+#NS1_API_KEY=""
+
+# =============================================================================
+# ADVANCED SETTINGS (rarely need to change)
+# =============================================================================
+# File paths for certificates and keys
+# Override only if you need custom file locations
+#ACCOUNTKEY="esxi_account.key"
+#KEY="esxi.key"
+#CSR="esxi.csr"
+#CRT="esxi.crt"
+#VMWARE_CRT="/etc/vmware/ssl/rui.crt"
+#VMWARE_KEY="/etc/vmware/ssl/rui.key"
 ```
 
 To apply your modifications, run `/etc/init.d/w2c-letsencrypt start`
@@ -208,6 +360,7 @@ Generating RSA private key, 4096 bit long modulus
 ### Force Renewal
 
 You already have a valid certificate from Let's Encrypt but nonetheless want to renew it now:
+
 ```shellsession
 rm /etc/vmware/ssl/rui.crt
 /etc/init.d/w2c-letsencrypt start
@@ -220,7 +373,7 @@ Before running the certificate renewal, you can test your setup:
 ### Test DNS Provider Configuration (DNS-01 only)
 
 ```shellsession
-# Test DNS record creation/deletion
+# Test DNS record creation/deletion with the modular DNS API framework
 /opt/w2c-letsencrypt/test_dns.sh
 ```
 
@@ -246,31 +399,34 @@ rm /etc/vmware/ssl/rui.crt
 The renewal process works differently depending on the challenge type you choose:
 
 ### Common Steps
-* Checks if the current certificate is issued by Let's Encrypt and due for renewal (_default:_ 30d in advance)
-* Generates a 4096-bit RSA keypair and CSR
-* Configures ESXi firewall to allow required outgoing connections
-* Uses an **enhanced version** of [acme-tiny](https://github.com/diafygi/acme-tiny) for all interactions with Let's Encrypt
-  * Extended with DNS-01 challenge support while maintaining the same lightweight, auditable principles
-  * Improved error handling and Python 3.5 compatibility for ESXi environments
-  * DNS functionality implemented via external hooks to keep the core script clean
-* Installs the retrieved certificate and gracefully restarts all services relying on it
-* Adds a cronjob to check periodically if the certificate is due for renewal (_default:_ weekly on Sunday, 00:00)
+
+- Checks if the current certificate is issued by Let's Encrypt and due for renewal (_default:_ 30d in advance)
+- Generates a 4096-bit RSA keypair and CSR
+- Configures ESXi firewall to allow required outgoing connections
+- Uses an **enhanced version** of [acme-tiny](https://github.com/diafygi/acme-tiny) for all interactions with Let's Encrypt
+  - Extended with DNS-01 challenge support while maintaining the same lightweight, auditable principles
+  - Improved error handling and Python 3.5 compatibility for ESXi environments
+  - DNS functionality implemented via modular provider framework to keep the core script clean
+- Installs the retrieved certificate and gracefully restarts all services relying on it
+- Adds a cronjob to check periodically if the certificate is due for renewal (_default:_ weekly on Sunday, 00:00)
 
 ### HTTP-01 Challenge Flow
-* Instructs `rhttpproxy` to route all requests to `/.well-known/acme-challenge` to a custom port
-* Temporarily enables `webAccess` and `vSphereClient` firewall rules if needed
-* Starts an HTTP server on a non-privileged port to fulfill Let's Encrypt challenges
-* Uses settings from `renew.cfg` for staging/production server and renewal intervals
-* Let's Encrypt validates domain ownership by accessing the challenge file via HTTP
 
-### DNS-01 Challenge Flow  
-* Temporarily enables `httpClient` firewall rule to allow DNS API calls
-* Uses the configured DNS provider (Cloudflare, Route53, or manual) to create TXT records
-* Calls `dns_hook.sh` to manage DNS record creation and cleanup automatically
-* Uses settings from `renew.cfg` for DNS provider, API credentials, and propagation timing
-* Leverages enhanced acme-tiny with DNS-01 support, keeping the same lightweight philosophy
-* Let's Encrypt validates domain ownership by checking DNS TXT records
-* Works for private/internal servers and supports wildcard certificates
+- Instructs `rhttpproxy` to route all requests to `/.well-known/acme-challenge` to a custom port
+- Temporarily enables `webAccess` and `vSphereClient` firewall rules if needed
+- Starts an HTTP server on a non-privileged port to fulfill Let's Encrypt challenges
+- Uses settings from `renew.cfg` for staging/production server and renewal intervals
+- Let's Encrypt validates domain ownership by accessing the challenge file via HTTP
+
+### DNS-01 Challenge Flow
+
+- Temporarily enables `httpClient` firewall rule to allow DNS API calls
+- Uses the configured DNS provider (Cloudflare, Route53, DigitalOcean, Namecheap, GoDaddy, PowerDNS, DuckDNS, NS1, Google Cloud DNS, Azure DNS, and manual) to create TXT records
+- Calls `dns_api.sh` framework to manage DNS record creation and cleanup through modular provider plugins
+- Uses settings from `renew.cfg` for DNS provider, API credentials, and propagation timing
+- Leverages enhanced acme-tiny with DNS-01 support, keeping the same lightweight philosophy
+- Let's Encrypt validates domain ownership by checking DNS TXT records
+- Works for private/internal servers and supports wildcard certificates
 
 ## Demo
 
@@ -365,15 +521,17 @@ See the [Wiki](https://github.com/w2c/letsencrypt-esxi/wiki) for possible pitfal
 
 ## License
 
-    w2c-letsencrypt-esxi is free software;
-    you can redistribute it and/or modify it under the terms of the
-    GNU General Public License as published by the Free Software Foundation,
-    either version 3 of the License, or (at your option) any later version.
+```text
+w2c-letsencrypt-esxi is free software;
+you can redistribute it and/or modify it under the terms of the
+GNU General Public License as published by the Free Software Foundation,
+either version 3 of the License, or (at your option) any later version.
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-    GNU General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+```

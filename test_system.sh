@@ -34,7 +34,7 @@ log_warn() {
 
 # Test 1: Check required files exist
 log_test "Checking required files exist"
-for file in "acme_tiny.py" "dns_hook.sh" "renew.sh" "renew.cfg.example"; do
+for file in "acme_tiny.py" "dnsapi/dns_api.sh" "renew.sh" "renew.cfg.example"; do
     if [ -f "$LOCALDIR/$file" ]; then
         log_pass "$file exists"
     else
@@ -42,13 +42,32 @@ for file in "acme_tiny.py" "dns_hook.sh" "renew.sh" "renew.cfg.example"; do
     fi
 done
 
+# Check DNS API providers
+log_test "Checking DNS API providers"
+for provider in "dns_cloudflare.sh" "dns_route53.sh" "dns_digitalocean.sh" "dns_manual.sh"; do
+    if [ -f "$LOCALDIR/dnsapi/$provider" ]; then
+        log_pass "dnsapi/$provider exists"
+    else
+        log_fail "dnsapi/$provider missing"
+    fi
+done
+
 # Test 2: Check file permissions
 log_test "Checking file permissions"
-for script in "dns_hook.sh" "renew.sh"; do
+for script in "dnsapi/dns_api.sh" "renew.sh"; do
     if [ -x "$LOCALDIR/$script" ]; then
         log_pass "$script is executable"
     else
         log_fail "$script is not executable"
+    fi
+done
+
+# Check DNS provider scripts
+for provider in "dnsapi/dns_cloudflare.sh" "dnsapi/dns_route53.sh" "dnsapi/dns_digitalocean.sh" "dnsapi/dns_manual.sh"; do
+    if [ -x "$LOCALDIR/$provider" ]; then
+        log_pass "$provider is executable"
+    else
+        log_warn "$provider is not executable (may not be critical)"
     fi
 done
 
@@ -64,14 +83,14 @@ fi
 log_test "Checking configuration"
 if [ -f "$LOCALDIR/renew.cfg" ]; then
     log_pass "renew.cfg exists"
-    
+
     # Check for required DNS settings
     if grep -q "CHALLENGE_TYPE.*dns-01" "$LOCALDIR/renew.cfg"; then
         log_pass "DNS-01 challenge type configured"
     else
         log_warn "DNS-01 challenge type not configured"
     fi
-    
+
     if grep -q "DNS_PROVIDER.*=" "$LOCALDIR/renew.cfg" && ! grep -q "DNS_PROVIDER=\"\"" "$LOCALDIR/renew.cfg"; then
         log_pass "DNS provider configured"
     else
@@ -99,12 +118,20 @@ else
     log_fail "Python not found"
 fi
 
-# Test 7: DNS hook help
-log_test "Testing DNS hook script"
-if "$LOCALDIR/dns_hook.sh" 2>&1 | grep -q "Usage:"; then
-    log_pass "DNS hook script responds correctly"
+# Test 7: DNS API framework
+log_test "Testing DNS API framework"
+if "$LOCALDIR/dnsapi/dns_api.sh" help 2>&1 | grep -q "Usage:"; then
+    log_pass "DNS API framework responds correctly"
 else
-    log_fail "DNS hook script doesn't respond correctly"
+    log_fail "DNS API framework doesn't respond correctly"
+fi
+
+# Test provider listing
+log_test "Testing DNS provider listing"
+if "$LOCALDIR/dnsapi/dns_api.sh" list 2>/dev/null | grep -q "Available DNS providers:"; then
+    log_pass "DNS provider listing works"
+else
+    log_fail "DNS provider listing failed"
 fi
 
 # Test 8: ACME tiny help
@@ -127,7 +154,7 @@ fi
 log_test "Checking ESXi environment"
 if [ -d "/etc/vmware" ]; then
     log_pass "ESXi environment detected"
-    
+
     if [ -f "/etc/vmware/ssl/rui.crt" ]; then
         log_pass "Current ESXi certificate found"
         echo "Current certificate expires: $(openssl x509 -enddate -noout -in /etc/vmware/ssl/rui.crt | cut -d= -f2)"
