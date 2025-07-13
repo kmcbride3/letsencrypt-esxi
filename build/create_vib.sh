@@ -25,6 +25,7 @@ cd "${LOCALDIR}" || exit
 
 VIB_DATE=$(date --date="$(git log -n1 --format="%cd" --date="iso")" '+%Y-%m-%dT%H:%I:%S')
 VIB_TAG=$(git describe --tags --abbrev=0 --match '[0-9]*.[0-9]*.[0-9]*' 2> /dev/null || echo 0.0.1)
+VIB_VERSION=$(echo "$VIB_TAG" | sed 's/^v//')
 
 # Setting up VIB spec confs
 VIB_DESC_FILE=${TEMP_DIR}/descriptor.xml
@@ -43,6 +44,12 @@ mkdir -p ${BIN_DIR} ${INIT_DIR}
 # Copy files to the corresponding locations
 cp ../* ${BIN_DIR} 2>/dev/null
 cp ../w2c-letsencrypt ${INIT_DIR}
+
+# Copy DNS API framework and providers
+if [ -d "../dnsapi" ]; then
+    mkdir -p ${BIN_DIR}/dnsapi
+    cp ../dnsapi/* ${BIN_DIR}/dnsapi/
+fi
 
 # Fix line endings for shell scripts (convert Windows CRLF to Unix LF)
 for script in renew.sh test_dns.sh test_system.sh; do
@@ -92,7 +99,7 @@ cat > ${VIB_DESC_FILE} << __W2C__
 <vib version="5.0">
   <type>bootbank</type>
   <name>w2c-letsencrypt-esxi</name>
-  <version>${VIB_TAG}-0.0.0</version>
+  <version>${VIB_VERSION}</version>
   <vendor>web-wack-creations</vendor>
   <summary>Let's Encrypt for ESXi</summary>
   <description>Let's Encrypt for ESXi</description>
