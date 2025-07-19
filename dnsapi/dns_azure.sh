@@ -135,7 +135,7 @@ Content-Type: application/json")
         fi
 
         # Try parent domain
-        if [ "$(echo "$test_domain" | tr '.' '\n' | wc -l)" -le 2 ]; then
+        if [ "$(echo "$test_domain" | awk -F'.' '{print NF}')" -le 2 ]; then
             break
         fi
         test_domain=$(echo "$test_domain" | cut -d. -f2-)
@@ -158,7 +158,7 @@ Content-Type: application/json")
         # Parse response to find the resource group
         # Simplified JSON parsing for ESXi compatibility
         local temp_file="/tmp/azure_zones_$$"
-        echo "$response" | tr ',' '\n' > "$temp_file" 2>/dev/null || true
+        echo "$response" | awk -F',' '{for(i=1;i<=NF;i++) print $i}' > "$temp_file" 2>/dev/null || true
 
         local found_zone=false
         while read -r line; do

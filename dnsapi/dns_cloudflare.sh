@@ -69,7 +69,7 @@ Content-Type: application/json")
 
     # Try parent domains
     local parent_domain="$domain"
-    while [ "$(echo "$parent_domain" | tr '.' '\n' | wc -l)" -gt 2 ]; do
+    while [ "$(echo "$parent_domain" | awk -F'.' '{print NF}')" -gt 2 ]; do
         parent_domain=$(echo "$parent_domain" | cut -d. -f2-)
 
         if [ -n "$CF_EMAIL_HEADER" ]; then
@@ -301,7 +301,7 @@ Content-Type: application/json")
 
     # Try parent domains
     local parent_domain="$domain"
-    while [ "$(echo "$parent_domain" | tr '.' '\n' | wc -l)" -gt 2 ]; do
+    while [ "$(echo "$parent_domain" | awk -F'.' '{print NF}')" -gt 2 ]; do
         parent_domain=$(echo "$parent_domain" | cut -d. -f2-)
 
         if [ -n "$CF_EMAIL_HEADER" ]; then

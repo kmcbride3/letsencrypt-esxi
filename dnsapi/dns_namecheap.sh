@@ -48,7 +48,7 @@ _nc_setup_auth() {
     # Get source IP if it's a URL
     if echo "$NAMECHEAP_SOURCEIP" | grep -q "^https\?://"; then
         dns_log_debug "Fetching source IP from URL: $NAMECHEAP_SOURCEIP"
-        SOURCEIP=$(dns_http_get "$NAMECHEAP_SOURCEIP" | tr -d '\r\n ')
+        SOURCEIP=$(dns_http_get "$NAMECHEAP_SOURCEIP" | sed 's/[\r\n ]//g')
         if [ -z "$SOURCEIP" ]; then
             dns_log_error "Failed to get source IP from $NAMECHEAP_SOURCEIP"
             return 1

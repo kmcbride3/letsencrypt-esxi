@@ -51,7 +51,7 @@ _gd_get_domain() {
     # Start with the full domain and work backwards
     local test_domain="$full_domain"
 
-    while [ "$(echo "$test_domain" | tr '.' '\n' | wc -l)" -gt 1 ]; do
+    while [ "$(echo "$test_domain" | awk -F'.' '{print NF}')" -gt 1 ]; do
         # Test if this is a valid domain by checking with GoDaddy API
         local response=$(dns_http_get "$GD_API_BASE/domains/$test_domain" "$GD_AUTH_HEADER
 Content-Type: application/json" 2>/dev/null)
@@ -132,7 +132,7 @@ dns_godaddy_add() {
         # Parse existing records and add them to the new set
         # This is a simplified JSON parser for ESXi compatibility
         local temp_file="/tmp/gd_records_$$"
-        echo "$existing_records" | tr ',' '\n' | grep '"data"' > "$temp_file" 2>/dev/null || true
+        echo "$existing_records" | awk -F',' '{for(i=1;i<=NF;i++) print $i}' | grep '"data"' > "$temp_file" 2>/dev/null || true
 
         while read -r line; do
             if [ -n "$line" ]; then
@@ -200,7 +200,7 @@ dns_godaddy_rm() {
     if [ "$existing_records" != "[]" ] && [ -n "$existing_records" ]; then
         # Parse existing records and add them to the new set (except the one to remove)
         local temp_file="/tmp/gd_records_$$"
-        echo "$existing_records" | tr ',' '\n' | grep '"data"' > "$temp_file" 2>/dev/null || true
+        echo "$existing_records" | awk -F',' '{for(i=1;i<=NF;i++) print $i}' | grep '"data"' > "$temp_file" 2>/dev/null || true
 
         while read -r line; do
             if [ -n "$line" ]; then

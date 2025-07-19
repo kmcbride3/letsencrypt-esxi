@@ -64,7 +64,7 @@ _r53_get_zone_id() {
 
     # Try parent domains
     local parent_domain="$domain"
-    while [ "$(echo "$parent_domain" | tr '.' '\n' | wc -l)" -gt 2 ]; do
+    while [ "$(echo "$parent_domain" | awk -F'.' '{print NF}')" -gt 2 ]; do
         parent_domain=$(echo "$parent_domain" | cut -d. -f2-)
 
         zone_id=$(aws route53 list-hosted-zones-by-name --dns-name "$parent_domain" --query "HostedZones[?Name=='${parent_domain}.'].Id" --output text 2>/dev/null | cut -d'/' -f3)
@@ -152,7 +152,7 @@ dns_route53_add() {
     dns_log_debug "Found Route53 zone ID: $zone_id"
 
     # Check if record already exists
-    local existing_value=$(aws route53 list-resource-record-sets --hosted-zone-id "$zone_id" --query "ResourceRecordSets[?Name=='${record_name}.'][ResourceRecords[0].Value]" --output text 2>/dev/null | tr -d '"')
+    local existing_value=$(aws route53 list-resource-record-sets --hosted-zone-id "$zone_id" --query "ResourceRecordSets[?Name=='${record_name}.'][ResourceRecords[0].Value]" --output text 2>/dev/null | sed 's/"//g')
 
     if [ "$existing_value" = "$txt_value" ]; then
         dns_log_info "TXT record already exists with correct value"
@@ -214,7 +214,7 @@ dns_route53_rm() {
         existing_value="$txt_value"
     else
         # Try to get existing value
-        existing_value=$(aws route53 list-resource-record-sets --hosted-zone-id "$zone_id" --query "ResourceRecordSets[?Name=='${record_name}.'][ResourceRecords[0].Value]" --output text 2>/dev/null | tr -d '"')
+        existing_value=$(aws route53 list-resource-record-sets --hosted-zone-id "$zone_id" --query "ResourceRecordSets[?Name=='${record_name}.'][ResourceRecords[0].Value]" --output text 2>/dev/null | sed 's/"//g')
     fi
 
     if [ -n "$existing_value" ]; then
@@ -275,7 +275,7 @@ dns_route53_get_zone() {
 
     # Try parent domains
     local parent_domain="$domain"
-    while [ "$(echo "$parent_domain" | tr '.' '\n' | wc -l)" -gt 2 ]; do
+    while [ "$(echo "$parent_domain" | awk -F'.' '{print NF}')" -gt 2 ]; do
         parent_domain=$(echo "$parent_domain" | cut -d. -f2-)
 
         zone_name=$(aws route53 list-hosted-zones-by-name --dns-name "$parent_domain" --query "HostedZones[?Name=='${parent_domain}.'].Name" --output text 2>/dev/null | sed 's/\.$//')

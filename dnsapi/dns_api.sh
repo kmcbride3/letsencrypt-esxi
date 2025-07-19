@@ -40,7 +40,8 @@ print(result)
 "
     else
         # Fallback using openssl (ESXi compatible)
-        echo -n "$key_auth" | openssl dgst -sha256 -binary | openssl base64 -A | tr -d '=' | tr '/+' '_-'
+        echo -n "$key_auth" | openssl dgst -sha256 -binary | openssl base64 -A | \
+            sed 's/=//g' | sed 'y/\/+/_-/'
     fi
 }
 
@@ -153,7 +154,7 @@ dns_get_zone() {
 
     # Strategy 2: Parent domains
     local parent_domain="$domain"
-    while [ "$(echo "$parent_domain" | tr '.' '\n' | wc -l)" -gt 2 ]; do
+    while [ "$(echo "$parent_domain" | awk -F'.' '{print NF}')" -gt 2 ]; do
         parent_domain=$(echo "$parent_domain" | cut -d. -f2-)
         if dns_zone_exists "$parent_domain" "$provider"; then
             echo "$parent_domain"
@@ -372,7 +373,7 @@ dns_url_encode() {
                     encoded="$encoded$(printf '%%%02X' "'$char")"
                 else
                     # Fallback for limited environments
-                    encoded="$encoded%$(echo -n "$char" | od -An -tx1 | tr -d ' ')"
+                    encoded="$encoded%$(echo -n "$char" | od -An -tx1 | sed 's/ //g')"
                 fi
                 ;;
         esac
@@ -493,8 +494,8 @@ except:
         # Basic validation - check for balanced braces
         local open_braces
         local close_braces
-        open_braces=$(echo "$json" | tr -cd '{' | wc -c)
-        close_braces=$(echo "$json" | tr -cd '}' | wc -c)
+        open_braces=$(echo "$json" | sed 's/[^\{]//g' | wc -c)
+        close_braces=$(echo "$json" | sed 's/[^\}]//g' | wc -c)
         [ "$open_braces" -eq "$close_braces" ]
     fi
 }
@@ -543,7 +544,7 @@ dns_extract_error() {
 
     # Fallback to basic text extraction
     if echo "$response" | grep -qi "error\|failed\|invalid"; then
-        echo "$response" | head -3 | tr '\n' ' '
+        echo "$response" | head -3 | awk '{printf "%s ", $0}'
         return 0
     fi
 
@@ -637,10 +638,10 @@ dns_query_resolver() {
 
     # Use dig if available, fallback to nslookup
     if command -v dig >/dev/null 2>&1; then
-        result=$(dig @"$resolver" TXT "_acme-challenge.$domain" +short +timeout=5 +tries=1 2>/dev/null | tr -d '"' | head -1)
+        result=$(dig @"$resolver" TXT "_acme-challenge.$domain" +short +timeout=5 +tries=1 2>/dev/null | sed 's/"//g' | head -1)
     elif command -v nslookup >/dev/null 2>&1; then
         # nslookup with timeout (ESXi compatible)
-        result=$(timeout 10 nslookup -type=TXT "_acme-challenge.$domain" "$resolver" 2>/dev/null | grep -o '"[^"]*"' | tr -d '"' | head -1)
+        result=$(timeout 10 nslookup -type=TXT "_acme-challenge.$domain" "$resolver" 2>/dev/null | grep -o '"[^\"]*"' | sed 's/"//g' | head -1)
     else
         dns_log_error "No DNS query tool available (dig or nslookup)"
         return 1

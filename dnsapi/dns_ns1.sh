@@ -65,7 +65,7 @@ Content-Type: application/json")
         fi
 
         # Try parent domain
-        if [ "$(echo "$test_domain" | tr '.' '\n' | wc -l)" -le 2 ]; then
+        if [ "$(echo "$test_domain" | awk -F'.' '{print NF}')" -le 2 ]; then
             break
         fi
         test_domain=$(echo "$test_domain" | cut -d. -f2-)
@@ -128,7 +128,7 @@ dns_ns1_add() {
         # Extract existing answers and add new one
         local answers=""
         local temp_file="/tmp/ns1_answers_$$"
-        echo "$existing_records" | tr ',' '\n' | grep '"rdata"' | sed 's/.*"rdata"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/' > "$temp_file" 2>/dev/null || true
+        echo "$existing_records" | awk -F',' '{for(i=1;i<=NF;i++) print $i}' | grep '"rdata"' | sed 's/.*"rdata"[[:space:]]*:[[:space:]]*"\([^\"]*\)".*/\1/' > "$temp_file" 2>/dev/null || true
 
         # Build answers array
         local first=true
@@ -216,7 +216,7 @@ dns_ns1_rm() {
     # Parse existing answers and remove the target value
     local answers=""
     local temp_file="/tmp/ns1_answers_$$"
-    echo "$existing_records" | tr ',' '\n' | grep '"rdata"' | sed 's/.*"rdata"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/' > "$temp_file" 2>/dev/null || true
+    echo "$existing_records" | awk -F',' '{for(i=1;i<=NF;i++) print $i}' | grep '"rdata"' | sed 's/.*"rdata"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/' > "$temp_file" 2>/dev/null || true
 
     local first=true
     local found=false

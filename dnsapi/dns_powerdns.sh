@@ -76,7 +76,7 @@ Content-Type: application/json")
 
     # Parse zones from JSON response
     local temp_file="/tmp/pdns_zones_$$"
-    echo "$response" | tr ',' '\n' | grep '"name"' | sed 's/.*"name"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/' > "$temp_file" 2>/dev/null || true
+    echo "$response" | awk -F',' '{for(i=1;i<=NF;i++) print $i}' | grep '"name"' | sed 's/.*"name"[[:space:]]*:[[:space:]]*"\([^\"]*\)".*/\1/' > "$temp_file" 2>/dev/null || true
 
     while read -r zone_name; do
         if [ -n "$zone_name" ]; then
@@ -117,7 +117,7 @@ Content-Type: application/json")
     if [ $? -eq 0 ]; then
         # Look for existing TXT records for this name
         local temp_file="/tmp/pdns_rrsets_$$"
-        echo "$response" | tr '}' '\n' | grep -E "\"name\"[[:space:]]*:[[:space:]]*\"$record_name\\.?\"" | grep "\"type\"[[:space:]]*:[[:space:]]*\"$record_type\"" > "$temp_file" 2>/dev/null || true
+        echo "$response" | awk -F'}' '{for(i=1;i<=NF;i++) print $i}' | grep -E "\"name\"[[:space:]]*:[[:space:]]*\"$record_name\\.?\"" | grep "\"type\"[[:space:]]*:[[:space:]]*\"$record_type\"" > "$temp_file" 2>/dev/null || true
 
         if [ -s "$temp_file" ]; then
             cat "$temp_file"
@@ -167,7 +167,7 @@ dns_powerdns_add() {
 
         # Parse existing records and build new record set
         local temp_file="/tmp/pdns_records_$$"
-        echo "$existing_rrset" | tr ',' '\n' | grep '"content"' | sed 's/.*"content"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/' > "$temp_file" 2>/dev/null || true
+        echo "$existing_rrset" | awk -F',' '{for(i=1;i<=NF;i++) print $i}' | grep '"content"' | sed 's/.*"content"[[:space:]]*:[[:space:]]*"\([^\"]*\)".*/\1/' > "$temp_file" 2>/dev/null || true
 
         local first=true
         records_json=""
@@ -255,7 +255,7 @@ dns_powerdns_rm() {
 
     # Parse existing records and filter out the target value
     local temp_file="/tmp/pdns_records_$$"
-    echo "$existing_rrset" | tr ',' '\n' | grep '"content"' | sed 's/.*"content"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/' > "$temp_file" 2>/dev/null || true
+    echo "$existing_rrset" | awk -F',' '{for(i=1;i<=NF;i++) print $i}' | grep '"content"' | sed 's/.*"content"[[:space:]]*:[[:space:]]*"\([^\"]*\)".*/\1/' > "$temp_file" 2>/dev/null || true
 
     local records_json=""
     local first=true

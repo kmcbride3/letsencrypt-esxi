@@ -97,7 +97,7 @@ _gcp_get_access_token() {
     else
         # Use service account key to get token
         local jwt_header='{"alg":"RS256","typ":"JWT"}'
-        local jwt_header_b64=$(echo -n "$jwt_header" | base64 | tr -d '=' | tr '/+' '_-')
+        local jwt_header_b64=$(echo -n "$jwt_header" | base64 | sed 's/=//g' | sed 'y/\/+/_-/')
 
         local now=$(date +%s)
         local exp=$((now + 3600))
@@ -106,7 +106,7 @@ _gcp_get_access_token() {
         local client_email=$(grep -o '"client_email":"[^"]*"' "$GCP_KEY_FILE" | cut -d'"' -f4)
 
         local jwt_payload="{\"iss\":\"$client_email\",\"scope\":\"https://www.googleapis.com/auth/ndev.clouddns.readwrite\",\"aud\":\"https://oauth2.googleapis.com/token\",\"exp\":$exp,\"iat\":$now}"
-        local jwt_payload_b64=$(echo -n "$jwt_payload" | base64 | tr -d '=' | tr '/+' '_-')
+        local jwt_payload_b64=$(echo -n "$jwt_payload" | base64 | sed 's/=//g' | sed 'y/\/+/_-/')
 
         local jwt_unsigned="${jwt_header_b64}.${jwt_payload_b64}"
 
@@ -144,7 +144,7 @@ Content-Type: application/json")
             # Parse response to find matching zone
             # Simplified JSON parsing for ESXi compatibility
             local temp_file="/tmp/gcp_zones_$$"
-            echo "$zone_response" | tr ',' '\n' | grep -E '"name"|"dnsName"' > "$temp_file" 2>/dev/null || true
+            echo "$zone_response" | awk -F',' '{for(i=1;i<=NF;i++) print $i}' | grep -E '"name"|"dnsName"' > "$temp_file" 2>/dev/null || true
 
             local zone_name=""
             local dns_name=""
@@ -168,7 +168,7 @@ Content-Type: application/json")
         fi
 
         # Try parent domain
-        if [ "$(echo "$test_domain" | tr '.' '\n' | wc -l)" -le 2 ]; then
+        if [ "$(echo "$test_domain" | awk -F'.' '{print NF}')" -le 2 ]; then
             break
         fi
         test_domain=$(echo "$test_domain" | cut -d. -f2-)
