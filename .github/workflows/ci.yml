@@ -3,8 +3,8 @@ name: w2c-letsencrypt-esxi
 on:
   push:
     tags:
-      - '[0-9]+.[0-9]+.[0-9]+'
-      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+*'
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
