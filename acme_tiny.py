@@ -78,7 +78,8 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, disable_check=False, directo
 
     # helper function - execute DNS API script for DNS-01 challenges
     def _execute_dns_api(action, domain, token, key_auth=None):
-        api_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dnsapi", "dns_api.sh")
+        api_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dnsapi")
+        api_script = os.path.join(api_dir, "dns_api.sh")
         if not os.path.exists(api_script) or not os.access(api_script, os.X_OK):
             raise ValueError("DNS API script not found or not executable: {0}".format(api_script))
 
