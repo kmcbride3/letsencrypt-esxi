@@ -7,6 +7,24 @@
 # description: Letsencrypt for ESXi
 #
 
+# Paths for config and backup
+BACKUP_CFG="/etc/renew.cfg.bak"
+TARGET_CFG="/opt/w2c-letsencrypt/renew.cfg"
+
+# If renew.cfg exists and is different from backup, update the backup
+if [ -f "$TARGET_CFG" ]; then
+    if [ ! -f "$BACKUP_CFG" ] || ! cmp -s "$TARGET_CFG" "$BACKUP_CFG"; then
+        cp -f "$TARGET_CFG" "$BACKUP_CFG"
+        echo "Backed up user renew.cfg to $BACKUP_CFG."
+    fi
+fi
+
+# Restore user-modified renew.cfg from persistent backup if it exists
+if [ -f "$BACKUP_CFG" ]; then
+    cp -f "$BACKUP_CFG" "$TARGET_CFG"
+    echo "Restored user renew.cfg from backup."
+fi
+
 export PATH=/sbin:/usr/sbin:/bin:/usr/bin
 
 log() {
