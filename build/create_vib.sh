@@ -85,15 +85,10 @@ fi
 # Ensure that shell scripts are executable
 chmod +x ${INIT_DIR}/w2c-letsencrypt ${BIN_DIR}/renew.sh ${BIN_DIR}/test_dns.sh ${BIN_DIR}/test_system.sh
 
-# Make DNS API framework and all providers executable
+# Make DNS API framework executable
 if [ -f "${BIN_DIR}/dnsapi/dns_api.sh" ]; then
     chmod +x "${BIN_DIR}/dnsapi/dns_api.sh"
 fi
-for dns_script in ${BIN_DIR}/dnsapi/dns_*.sh; do
-    if [ -f "${dns_script}" ]; then
-        chmod +x "${dns_script}"
-    fi
-done
 
 # Create tgz with payload
 tar czf ${TEMP_DIR}/payload1 -C ${VIB_PAYLOAD_DIR} etc opt
