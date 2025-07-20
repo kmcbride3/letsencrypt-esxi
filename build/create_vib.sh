@@ -51,10 +51,8 @@ mkdir -p ${BIN_DIR} ${INIT_DIR}
 cp ../* ${BIN_DIR} 2>/dev/null
 cp ../w2c-letsencrypt ${INIT_DIR}
 
-# Ensure renew.cfg is only created if it does not exist (preserve user changes)
-if [ ! -f "${BIN_DIR}/renew.cfg" ]; then
-    cp "${BIN_DIR}/renew.cfg.example" "${BIN_DIR}/renew.cfg"
-fi
+# Only copy renew.cfg.example, do NOT create renew.cfg in the payload
+rm -f ${BIN_DIR}/renew.cfg 2>/dev/null
 
 # Copy DNS API framework and providers
 if [ -d "../dnsapi" ]; then
