@@ -1,5 +1,3 @@
-#!/bin/sh
-#
 # DigitalOcean DNS API Provider
 # Requires: DO_API_TOKEN
 #
@@ -19,8 +17,6 @@ dns_digitalocean_info() {
 
 # DigitalOcean API endpoint
 DO_API_BASE="https://api.digitalocean.com/v2"
-
-# Default settings
 DO_TTL=${DO_TTL:-120}
 
 # Authentication setup
@@ -29,139 +25,117 @@ _do_setup_auth() {
         dns_log_error "DigitalOcean API token not found. Please set DO_API_TOKEN"
         return 1
     fi
-
     dns_log_debug "Using DigitalOcean API Token authentication"
     DO_AUTH_HEADER="Authorization: Bearer $DO_API_TOKEN"
     return 0
 }
 
+# Helper: Extract base domain from FQDN (e.g., sub.domain.example.com -> example.com)
+do_get_base_domain() {
+    fqdn="$1"
+    echo "$fqdn" | awk -F. '{if (NF>=2) print $(NF-1)"."$NF; else print $0}'
+}
+
 # Get domain for zone
-_do_get_domain() {
-    local domain="$1"
-
-    # Try exact match first
-    local domain_response=$(dns_http_get "$DO_API_BASE/domains/$domain" "$DO_AUTH_HEADER
-Content-Type: application/json")
-
-    local domain_name=$(dns_json_get "$domain_response" "domain.name")
-
-    if [ -n "$domain_name" ] && [ "$domain_name" != "null" ]; then
+do_get_domain() {
+    domain="$1"
+    base_domain="$(do_get_base_domain "$domain")"
+    headers="$DO_AUTH_HEADER\nContent-Type: application/json"
+    dns_log_debug "[DO] Looking up domain for base domain: $base_domain"
+    domain_response=$(dns_http_get "$DO_API_BASE/domains/$base_domain" "$headers")
+    domain_name=$(echo "$domain_response" | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
+    if [ -n "$domain_name" ]; then
+        dns_log_debug "[DO] Found domain_name: $domain_name for $base_domain"
         echo "$domain_name"
         return 0
     fi
-
     # Try parent domains
-    local parent_domain="$domain"
+    parent_domain="$base_domain"
     while [ "$(echo "$parent_domain" | awk -F'.' '{print NF}')" -gt 2 ]; do
-        parent_domain=$(echo "$parent_domain" | cut -d. -f2-)
-
-        domain_response=$(dns_http_get "$DO_API_BASE/domains/$parent_domain" "$DO_AUTH_HEADER
-Content-Type: application/json")
-
-        domain_name=$(dns_json_get "$domain_response" "domain.name")
-
-        if [ -n "$domain_name" ] && [ "$domain_name" != "null" ]; then
+        parent_domain=$(echo "$parent_domain" | sed 's/^[^.]*\.//')
+        dns_log_debug "[DO] Trying parent domain: $parent_domain"
+        domain_response=$(dns_http_get "$DO_API_BASE/domains/$parent_domain" "$headers")
+        domain_name=$(echo "$domain_response" | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
+        if [ -n "$domain_name" ]; then
+            dns_log_debug "[DO] Found parent domain_name: $domain_name for $parent_domain"
             echo "$domain_name"
             return 0
         fi
     done
-
-    dns_log_error "Could not find DigitalOcean domain for: $domain"
+    dns_log_error "Could not find DigitalOcean domain for: $base_domain"
     return 1
 }
 
 # Get existing TXT record ID
-_do_get_txt_record_id() {
-    local domain_name="$1"
-    local record_name="$2"
-    local txt_value="$3"
-
-    local records_response=$(dns_http_get "$DO_API_BASE/domains/$domain_name/records?type=TXT&name=$record_name" "$DO_AUTH_HEADER
-Content-Type: application/json")
-
-    # Find record with matching data
-    local i=0
-    while true; do
-        local record_id=$(dns_json_get "$records_response" "domain_records.$i.id")
-        local record_data=$(dns_json_get "$records_response" "domain_records.$i.data")
-
-        if [ -z "$record_id" ] || [ "$record_id" = "null" ]; then
+do_get_txt_record_id() {
+    domain_name="$1"
+    record_name="$2"
+    txt_value="$3"
+    headers="$DO_AUTH_HEADER\nContent-Type: application/json"
+    records_response=$(dns_http_get "$DO_API_BASE/domains/$domain_name/records?type=TXT&name=$record_name" "$headers")
+    i=0
+    while :; do
+        record_id=$(echo "$records_response" | sed -n "s/.*'id':\([0-9]*\).*/\1/p" | sed -n "$((i+1))p")
+        record_data=$(echo "$records_response" | sed -n 's/.*"data":"\([^"]*\)".*/\1/p' | sed -n "$((i+1))p")
+        if [ -z "$record_id" ]; then
             break
         fi
-
         if [ "$record_data" = "$txt_value" ]; then
+            dns_log_debug "[DO] Found matching TXT record id: $record_id"
             echo "$record_id"
             return 0
         fi
-
         i=$((i + 1))
+        if [ $i -ge 20 ]; then
+            dns_log_warn "[DO] TXT record search exceeded 20 iterations, possible malformed API response."
+            break
+        fi
     done
-
     return 1
 }
 
 # Add TXT record
 dns_digitalocean_add() {
-    local domain="$1"
-    local txt_value="$2"
-
+    domain="$1"
+    txt_value="$2"
+    dns_log_debug "[DO] Starting dns_digitalocean_add for $domain"
     _do_setup_auth || return 1
-
-    local record_name="_acme-challenge"
-    local domain_name
-
-    # Get domain name
-    domain_name=$(_do_get_domain "$domain")
+    base_domain="$(do_get_base_domain "$domain")"
+    domain_name=$(do_get_domain "$domain")
     if [ -z "$domain_name" ]; then
+        dns_log_error "[DO] No domain_name found for $base_domain"
         return 1
     fi
-
-    dns_log_debug "Found DigitalOcean domain: $domain_name"
-
+    dns_log_debug "[DO] Found DigitalOcean domain: $domain_name"
     # Calculate full record name relative to domain
     if [ "$domain" = "$domain_name" ]; then
         record_name="_acme-challenge"
     else
-        # For subdomains, include the subdomain part
-        local subdomain_part=$(echo "$domain" | sed "s/\.$domain_name$//" | sed "s/$domain_name$//")
+        subdomain_part=$(echo "$domain" | sed "s/\.$domain_name$//" | sed "s/$domain_name$//")
         if [ -n "$subdomain_part" ]; then
             record_name="_acme-challenge.$subdomain_part"
         else
             record_name="_acme-challenge"
         fi
     fi
-
-    # Check if record already exists
-    local existing_record_id
-    existing_record_id=$(_do_get_txt_record_id "$domain_name" "$record_name" "$txt_value")
-
+    existing_record_id=$(do_get_txt_record_id "$domain_name" "$record_name" "$txt_value")
     if [ -n "$existing_record_id" ]; then
         dns_log_info "TXT record already exists with ID: $existing_record_id"
         echo "$existing_record_id" > "/tmp/acme_do_record_${domain}.id"
         echo "$domain_name" > "/tmp/acme_do_domain_${domain}.name"
         return 0
     fi
-
-    # Create new TXT record
-    local record_data="{
-        \"type\": \"TXT\",
-        \"name\": \"$record_name\",
-        \"data\": \"$txt_value\",
-        \"ttl\": $DO_TTL
-    }"
-
-    local create_response=$(dns_http_post "$DO_API_BASE/domains/$domain_name/records" "$record_data" "$DO_AUTH_HEADER
-Content-Type: application/json")
-
-    local record_id=$(dns_json_get "$create_response" "domain_record.id")
-
-    if [ -n "$record_id" ] && [ "$record_id" != "null" ]; then
+    record_data="{\"type\":\"TXT\",\"name\":\"$record_name\",\"data\":\"$txt_value\",\"ttl\":$DO_TTL}"
+    headers="$DO_AUTH_HEADER\nContent-Type: application/json"
+    create_response=$(dns_http_post "$DO_API_BASE/domains/$domain_name/records" "$record_data" "$headers")
+    record_id=$(echo "$create_response" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+    if [ -n "$record_id" ]; then
         dns_log_info "Created DigitalOcean TXT record: $record_id"
         echo "$record_id" > "/tmp/acme_do_record_${domain}.id"
         echo "$domain_name" > "/tmp/acme_do_domain_${domain}.name"
         return 0
     else
-        local error_msg=$(dns_json_get "$create_response" "message")
+        error_msg=$(echo "$create_response" | sed -n 's/.*"message":"\([^"]*\)".*/\1/p')
         dns_log_error "Failed to create DigitalOcean TXT record: $error_msg"
         return 1
     fi
@@ -169,89 +143,68 @@ Content-Type: application/json")
 
 # Remove TXT record
 dns_digitalocean_rm() {
-    local domain="$1"
-    local txt_value="$2"
-
+    domain="$1"
+    txt_value="$2"
+    dns_log_debug "[DO] Starting dns_digitalocean_rm for $domain"
     _do_setup_auth || return 1
-
-    local record_file="/tmp/acme_do_record_${domain}.id"
-    local domain_file="/tmp/acme_do_domain_${domain}.name"
-
-    # Try to get record ID and domain name from files first
-    local record_id=""
-    local domain_name=""
-
+    record_file="/tmp/acme_do_record_${domain}.id"
+    domain_file="/tmp/acme_do_domain_${domain}.name"
+    record_id=""
+    domain_name=""
     if [ -f "$record_file" ]; then
         record_id=$(cat "$record_file" 2>/dev/null)
     fi
-
     if [ -f "$domain_file" ]; then
         domain_name=$(cat "$domain_file" 2>/dev/null)
     fi
-
-    # If we don't have the domain name, try to find it
     if [ -z "$domain_name" ]; then
-        domain_name=$(_do_get_domain "$domain")
+        domain_name=$(do_get_domain "$domain")
         if [ -z "$domain_name" ]; then
             dns_log_warn "Could not find domain for cleanup"
             rm -f "$record_file" "$domain_file"
             return 0
         fi
     fi
-
-    # If we don't have the record ID, try to find it
     if [ -z "$record_id" ] && [ -n "$txt_value" ]; then
-        local record_name="_acme-challenge"
-
-        # Calculate full record name relative to domain
-        if [ "$domain" != "$domain_name" ]; then
-            local subdomain_part=$(echo "$domain" | sed "s/\.$domain_name$//" | sed "s/$domain_name$//")
+        if [ "$domain" = "$domain_name" ]; then
+            record_name="_acme-challenge"
+        else
+            subdomain_part=$(echo "$domain" | sed "s/\.$domain_name$//" | sed "s/$domain_name$//")
             if [ -n "$subdomain_part" ]; then
                 record_name="_acme-challenge.$subdomain_part"
+            else
+                record_name="_acme-challenge"
             fi
         fi
-
-        record_id=$(_do_get_txt_record_id "$domain_name" "$record_name" "$txt_value")
+        record_id=$(do_get_txt_record_id "$domain_name" "$record_name" "$txt_value")
     fi
-
-    if [ -n "$record_id" ] && [ "$record_id" != "null" ]; then
+    if [ -n "$record_id" ]; then
         dns_log_debug "Deleting DigitalOcean record ID: $record_id"
-
-        local delete_response=$(dns_http_delete "$DO_API_BASE/domains/$domain_name/records/$record_id" "$DO_AUTH_HEADER
-Content-Type: application/json")
-
-        # DigitalOcean returns empty response on successful deletion
+        headers="$DO_AUTH_HEADER\nContent-Type: application/json"
+        delete_response=$(dns_http_delete "$DO_API_BASE/domains/$domain_name/records/$record_id" "$headers")
         dns_log_info "Deleted DigitalOcean TXT record"
     else
         dns_log_warn "No record ID found for cleanup (record may have already been deleted)"
     fi
-
-    # Clean up temporary files
     rm -f "$record_file" "$domain_file"
     return 0
 }
 
 # Check if zone exists (override default implementation)
 dns_zone_exists() {
-    local zone="$1"
-    local provider="$2"
-
+    zone="$1"
+    provider="$2"
     if [ "$provider" != "digitalocean" ]; then
         return 1
     fi
-
     _do_setup_auth || return 1
-
-    local domain_name
-    domain_name=$(_do_get_domain "$zone")
-
+    domain_name=$(do_get_domain "$zone")
     [ -n "$domain_name" ]
 }
 
 # Get zone for domain (override default implementation)
 dns_digitalocean_get_zone() {
-    local domain="$1"
-
+    domain="$1"
     _do_setup_auth || return 1
-    _do_get_domain "$domain"
+    do_get_domain "$domain"
 }
