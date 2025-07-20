@@ -8,6 +8,9 @@
 # Commands: add, rm, info, list, test
 #
 
+DNSAPIDIR=$(dirname "$(readlink -f "$0")")
+LOCALDIR="$DNSAPIDIR/.."
+
 # Parse command line arguments
 COMMAND="$1"
 DOMAIN="$2"
@@ -16,13 +19,13 @@ KEY_AUTH="$4"
 
 # Calculate TXT value from key authorization for DNS-01 challenges
 calculate_txt_value() {
-    local key_auth="$1"
+    key_auth="$1"
     if [ -z "$key_auth" ]; then
         return 1
     fi
 
     # Use the same calculation as acme_tiny.py: base64(sha256(key_auth))
-    if command -v python3 >/dev/null 2>&1; then
+    if which python3 >/dev/null 2>&1; then
         echo -n "$key_auth" | python3 -c "
 import sys, hashlib, base64
 data = sys.stdin.read().encode('utf8')
@@ -30,7 +33,7 @@ hash_digest = hashlib.sha256(data).digest()
 result = base64.urlsafe_b64encode(hash_digest).decode('utf8').replace('=', '')
 print(result)
 "
-    elif command -v python >/dev/null 2>&1; then
+    elif which python >/dev/null 2>&1; then
         echo -n "$key_auth" | python -c "
 import sys, hashlib, base64
 data = sys.stdin.read().encode('utf8')
@@ -66,19 +69,15 @@ if [ "$COMMAND" = "add" ] || [ "$COMMAND" = "rm" ]; then
     fi
 fi
 
-# Configuration loading - check both local directory and parent
-SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
-LOCALDIR="$(dirname "$SCRIPT_DIR")"
-
 # Load configuration from renew.cfg
 if [ -r "$LOCALDIR/renew.cfg" ]; then
     . "$LOCALDIR/renew.cfg"
-elif [ -r "$SCRIPT_DIR/../renew.cfg" ]; then
-    . "$SCRIPT_DIR/../renew.cfg"
+elif [ -r "$DNSAPIDIR/../renew.cfg" ]; then
+    . "$DNSAPIDIR/../renew.cfg"
 fi
 
 # DNS API version
-DNS_API_VERSION="2.0.0"
+DNS_API_VERSION="1.2.0"
 
 # Default settings that providers can override
 DEFAULT_DNS_TIMEOUT=${DNS_TIMEOUT:-30}
@@ -106,9 +105,12 @@ dns_log_error() {
     echo "[DNS-ERROR] $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
 }
 
+dns_log_debug "DNS_PROVIDER is '$DNS_PROVIDER'"
+dns_log_debug "CF_API_TOKEN is '$CF_API_TOKEN'"
+
 # Validation functions
 dns_validate_domain() {
-    local domain="$1"
+    domain="$1"
     if [ -z "$domain" ]; then
         dns_log_error "Domain cannot be empty"
         return 1
@@ -124,7 +126,7 @@ dns_validate_domain() {
 }
 
 dns_validate_txt_value() {
-    local txt_value="$1"
+    txt_value="$1"
     if [ -z "$txt_value" ]; then
         dns_log_error "TXT value cannot be empty"
         return 1
@@ -132,7 +134,7 @@ dns_validate_txt_value() {
 
     # Validate base64-like encoding (basic check)
     if [ ${#txt_value} -lt 40 ]; then
-        dns_log_error "TXT value seems too short (${#txt_value} chars)"
+        dns_log_error "TXT value seems to short (${#txt_value} chars)"
         return 1
     fi
 
@@ -141,8 +143,8 @@ dns_validate_txt_value() {
 
 # DNS zone detection utilities
 dns_get_zone() {
-    local domain="$1"
-    local provider="$2"
+    domain="$1"
+    provider="$2"
 
     # Try different zone detection strategies
 
@@ -153,7 +155,7 @@ dns_get_zone() {
     fi
 
     # Strategy 2: Parent domains
-    local parent_domain="$domain"
+    parent_domain="$domain"
     while [ "$(echo "$parent_domain" | awk -F'.' '{print NF}')" -gt 2 ]; do
         parent_domain=$(echo "$parent_domain" | cut -d. -f2-)
         if dns_zone_exists "$parent_domain" "$provider"; then
@@ -163,7 +165,7 @@ dns_get_zone() {
     done
 
     # Strategy 3: Common patterns
-    local base_domain=$(echo "$domain" | awk -F. '{if(NF>=2) print $(NF-1)"."$NF; else print $0}')
+    base_domain=$(echo "$domain" | awk -F. '{if(NF>=2) print $(NF-1)"."$NF; else print $0}')
     if dns_zone_exists "$base_domain" "$provider"; then
         echo "$base_domain"
         return 0
@@ -173,190 +175,149 @@ dns_get_zone() {
     return 1
 }
 
-# Enhanced HTTP utilities with better error handling and timeout management
+# BusyBox-only HTTP GET utility
 dns_http_get() {
-    local url="$1"
-    local headers="$2"
-    local timeout="${3:-$DEFAULT_DNS_TIMEOUT}"
-    local max_redirects="${4:-5}"
+    url="$1"
+    headers="$2"
+    timeout="${3:-$DEFAULT_DNS_TIMEOUT}"
+    max_redirects="${4:-5}"
+
+    # Ensure timeout is a bare integer (BusyBox compatible)
+    timeout="$(echo "$timeout" | sed 's/[a-zA-Z]//g')"
 
     dns_log_debug "HTTP GET: $url (timeout: ${timeout}s)"
 
-    # Use curl if available, fallback to wget
-    if command -v curl >/dev/null 2>&1; then
-        local curl_args="-s --max-time $timeout --max-redirs $max_redirects"
+    if ! which wget >/dev/null 2>&1; then
+        dns_log_error "No HTTP client available (wget required)"
+        return 127
+    fi
 
-        # Add headers if provided
-        if [ -n "$headers" ]; then
-            while IFS= read -r header; do
-                [ -n "$header" ] && curl_args="$curl_args -H \"$header\""
-            done << EOF
-$headers
-EOF
+    set -- -qO- --no-check-certificate
+    if [ -n "$headers" ]; then
+        OLD_IFS="$IFS"
+        IFS='
+'
+        for header in $headers; do
+            set -- "$@" --header="$header"
+        done
+        IFS="$OLD_IFS"
+    fi
+    set -- "$@" "$url"
+    if [ "${DEBUG:-0}" = "1" ]; then
+        echo "[DNS-DEBUG] $(date '+%Y-%m-%d %H:%M:%S') Final wget command: wget $*" >&2
+    fi
+    if which timeout >/dev/null 2>&1; then
+        response=$(timeout -t $timeout wget "$@" 2>&1)
+        if [ "${DEBUG:-0}" = "1" ]; then
+            echo "[DNS-DEBUG] $(date '+%Y-%m-%d %H:%M:%S') Raw HTTP GET response:" >&2
+            echo "$response" >&2
         fi
-
-        # Execute curl with error handling
-        local response
-        local exit_code
-        response=$(eval "curl $curl_args \"$url\"" 2>&1)
         exit_code=$?
-
-        if [ $exit_code -eq 0 ]; then
-            echo "$response"
-            return 0
-        else
-            dns_log_debug "curl failed with exit code $exit_code: $response"
-            return $exit_code
-        fi
-
-    elif command -v wget >/dev/null 2>&1; then
-        local wget_args="-qO- --timeout=$timeout --max-redirect=$max_redirects --no-check-certificate"
-
-        # Add headers if provided
-        if [ -n "$headers" ]; then
-            while IFS= read -r header; do
-                [ -n "$header" ] && wget_args="$wget_args --header=\"$header\""
-            done << EOF
-$headers
-EOF
-        fi
-
-        # Execute wget with error handling
-        local response
-        local exit_code
-        response=$(eval "wget $wget_args \"$url\"" 2>&1)
-        exit_code=$?
-
-        if [ $exit_code -eq 0 ]; then
-            echo "$response"
-            return 0
-        else
-            dns_log_debug "wget failed with exit code $exit_code: $response"
-            return $exit_code
+        if [ $exit_code -eq 124 ]; then
+            dns_log_error "wget timed out after ${timeout}s"
+            return 124
         fi
     else
-        dns_log_error "No HTTP client available (curl or wget required)"
-        return 127
+        response=$(wget "$@" 2>&1)
+        if [ "${DEBUG:-0}" = "1" ]; then
+            echo "[DNS-DEBUG] $(date '+%Y-%m-%d %H:%M:%S') Raw HTTP GET response:" >&2
+            echo "$response" >&2
+        fi
+        exit_code=$?
+    fi
+    if [ $exit_code -eq 0 ]; then
+        dns_log_debug "HTTP GET response: $response"
+        echo "$response"
+        return 0
+    else
+        dns_log_debug "wget failed with exit code $exit_code: $response"
+        return $exit_code
     fi
 }
 
+# BusyBox-only HTTP POST utility (not supported)
 dns_http_post() {
-    local url="$1"
-    local data="$2"
-    local headers="$3"
-    local timeout="${4:-$DEFAULT_DNS_TIMEOUT}"
-    local content_type="${5:-application/json}"
+    url="$1"
+    data="$2"
+    headers="$3"
+    timeout="${4:-$DEFAULT_DNS_TIMEOUT}"
+
+    # Ensure timeout is a bare integer (BusyBox compatible)
+    timeout="$(echo "$timeout" | sed 's/[a-zA-Z]//g')"
 
     dns_log_debug "HTTP POST: $url (timeout: ${timeout}s)"
-    dns_log_debug "POST data: $data"
 
-    # Use curl if available, fallback to wget
-    if command -v curl >/dev/null 2>&1; then
-        local curl_args="-s --max-time $timeout"
+    if ! which wget >/dev/null 2>&1; then
+        dns_log_error "No HTTP client available (wget required)"
+        return 127
+    fi
 
-        # Add content type
-        curl_args="$curl_args -H \"Content-Type: $content_type\""
+    # Compact JSON data: remove all newlines, carriage returns, tabs, and literal \n, \t; collapse spaces
+    compact_data=$(echo "$data" \
+        | sed 's/\\n//g; s/\\t//g' \
+        | sed 's/[\r\n\t]//g' \
+        | sed 's/  */ /g')
 
-        # Add custom headers if provided
-        if [ -n "$headers" ]; then
-            while IFS= read -r header; do
-                [ -n "$header" ] && curl_args="$curl_args -H \"$header\""
-            done << EOF
-$headers
-EOF
+    set -- -qO- --no-check-certificate --post-data="$compact_data"
+    if [ -n "$headers" ]; then
+        OLD_IFS="$IFS"
+        IFS='
+'
+        for header in $headers; do
+            set -- "$@" --header="$header"
+        done
+        IFS="$OLD_IFS"
+    fi
+    set -- "$@" "$url"
+    if [ "${DEBUG:-0}" = "1" ]; then
+        echo "[DNS-DEBUG] $(date '+%Y-%m-%d %H:%M:%S') Final wget POST command: wget $*" >&2
+    fi
+    if which timeout >/dev/null 2>&1; then
+        response=$(timeout -t $timeout wget "$@" 2>&1)
+        if [ "${DEBUG:-0}" = "1" ]; then
+            echo "[DNS-DEBUG] $(date '+%Y-%m-%d %H:%M:%S') Raw HTTP POST response:" >&2
+            echo "$response" >&2
         fi
-
-        # Execute curl with data
-        local response
-        local exit_code
-        response=$(eval "curl $curl_args -d \"$data\" \"$url\"" 2>&1)
         exit_code=$?
-
-        # Check for rate limiting in response
-        if [ $exit_code -eq 0 ]; then
-            echo "$response"
-            return 0
-        else
-            dns_log_debug "curl POST failed with exit code $exit_code: $response"
-            return $exit_code
-        fi
-
-    elif command -v wget >/dev/null 2>&1; then
-        local wget_args="-qO- --timeout=$timeout --no-check-certificate"
-        wget_args="$wget_args --header=\"Content-Type: $content_type\""
-
-        # Add custom headers if provided
-        if [ -n "$headers" ]; then
-            while IFS= read -r header; do
-                [ -n "$header" ] && wget_args="$wget_args --header=\"$header\""
-            done << EOF
-$headers
-EOF
-        fi
-
-        # Execute wget with post data
-        local response
-        local exit_code
-        response=$(eval "wget $wget_args --post-data=\"$data\" \"$url\"" 2>&1)
-        exit_code=$?
-
-        if [ $exit_code -eq 0 ]; then
-            echo "$response"
-            return 0
-        else
-            dns_log_debug "wget POST failed with exit code $exit_code: $response"
-            return $exit_code
+        if [ $exit_code -eq 124 ]; then
+            dns_log_error "wget timed out after ${timeout}s"
+            return 124
         fi
     else
-        dns_log_error "No HTTP client available (curl or wget required)"
-        return 127
+        response=$(wget "$@" 2>&1)
+        if [ "${DEBUG:-0}" = "1" ]; then
+            echo "[DNS-DEBUG] $(date '+%Y-%m-%d %H:%M:%S') Raw HTTP POST response:" >&2
+            echo "$response" >&2
+        fi
+        exit_code=$?
+    fi
+    if [ $exit_code -eq 0 ]; then
+        dns_log_debug "HTTP POST response: $response"
+        echo "$response"
+        return 0
+    else
+        dns_log_debug "wget POST failed with exit code $exit_code: $response"
+        return $exit_code
     fi
 }
 
 dns_http_delete() {
-    local url="$1"
-    local headers="$2"
-    local timeout="${3:-$DEFAULT_DNS_TIMEOUT}"
+    url="$1"
+    headers="$2"
+    timeout="${3:-$DEFAULT_DNS_TIMEOUT}"
 
     dns_log_debug "HTTP DELETE: $url (timeout: ${timeout}s)"
 
-    # Only curl supports DELETE method reliably
-    if command -v curl >/dev/null 2>&1; then
-        local curl_args="-s --max-time $timeout -X DELETE"
-
-        # Add headers if provided
-        if [ -n "$headers" ]; then
-            while IFS= read -r header; do
-                [ -n "$header" ] && curl_args="$curl_args -H \"$header\""
-            done << EOF
-$headers
-EOF
-        fi
-
-        # Execute curl DELETE
-        local response
-        local exit_code
-        response=$(eval "curl $curl_args \"$url\"" 2>&1)
-        exit_code=$?
-
-        if [ $exit_code -eq 0 ]; then
-            echo "$response"
-            return 0
-        else
-            dns_log_debug "curl DELETE failed with exit code $exit_code: $response"
-            return $exit_code
-        fi
-    else
-        dns_log_warn "DELETE method not supported with wget, record may not be cleaned up"
-        return 1
-    fi
+    # DELETE not supported with wget
+    dns_log_warn "DELETE method not supported with wget, record may not be cleaned up"
+    return 1
 }
 
 # URL encoding utility (ESXi-compatible)
 dns_url_encode() {
-    local string="$1"
-    local encoded=""
-    local char
+    string="$1"
+    encoded=""
+    char=""
 
     # Process each character
     while [ -n "$string" ]; do
@@ -369,7 +330,7 @@ dns_url_encode() {
                 ;;
             *)
                 # Convert to hex (ESXi compatible method)
-                if command -v printf >/dev/null 2>&1; then
+                if which printf >/dev/null 2>&1; then
                     encoded="$encoded$(printf '%%%02X' "'$char")"
                 else
                     # Fallback for limited environments
@@ -384,8 +345,8 @@ dns_url_encode() {
 
 # Enhanced JSON utilities with better error handling
 dns_json_get() {
-    local json="$1"
-    local path="$2"
+    json="$1"
+    path="$2"
 
     # Validate input
     if [ -z "$json" ] || [ -z "$path" ]; then
@@ -394,7 +355,7 @@ dns_json_get() {
     fi
 
     # Use python if available for robust JSON parsing
-    if command -v python >/dev/null 2>&1; then
+    if which python >/dev/null 2>&1; then
         echo "$json" | python -c "
 import sys, json
 try:
@@ -422,7 +383,7 @@ except Exception as e:
     print('')
     sys.exit(1)
 "
-    elif command -v python3 >/dev/null 2>&1; then
+    elif which python3 >/dev/null 2>&1; then
         echo "$json" | python3 -c "
 import sys, json
 try:
@@ -470,9 +431,9 @@ except Exception as e:
 
 # JSON validation utility
 dns_json_validate() {
-    local json="$1"
+    json="$1"
 
-    if command -v python >/dev/null 2>&1; then
+    if which python >/dev/null 2>&1; then
         echo "$json" | python -c "
 import sys, json
 try:
@@ -481,7 +442,7 @@ try:
 except:
     sys.exit(1)
 " 2>/dev/null
-    elif command -v python3 >/dev/null 2>&1; then
+    elif which python3 >/dev/null 2>&1; then
         echo "$json" | python3 -c "
 import sys, json
 try:
@@ -492,8 +453,8 @@ except:
 " 2>/dev/null
     else
         # Basic validation - check for balanced braces
-        local open_braces
-        local close_braces
+        open_braces=""
+        close_braces=""
         open_braces=$(echo "$json" | sed 's/[^\{]//g' | wc -c)
         close_braces=$(echo "$json" | sed 's/[^\}]//g' | wc -c)
         [ "$open_braces" -eq "$close_braces" ]
@@ -502,8 +463,8 @@ except:
 
 # Extract error messages from API responses
 dns_extract_error() {
-    local response="$1"
-    local provider="$2"
+    response="$1"
+    provider="$2"
 
     if [ -z "$response" ]; then
         echo "Empty response from API"
@@ -515,17 +476,14 @@ dns_extract_error() {
         # Provider-specific error extraction
         case "$provider" in
             "cloudflare")
-                local error_msg
                 error_msg=$(dns_json_get "$response" "errors.0.message")
                 [ -n "$error_msg" ] && echo "$error_msg" && return 0
                 ;;
             "route53")
-                local error_msg
                 error_msg=$(dns_json_get "$response" "Error.Message")
                 [ -n "$error_msg" ] && echo "$error_msg" && return 0
                 ;;
             "digitalocean")
-                local error_msg
                 error_msg=$(dns_json_get "$response" "message")
                 [ -n "$error_msg" ] && echo "$error_msg" && return 0
                 ;;
@@ -533,7 +491,6 @@ dns_extract_error() {
 
         # Generic error field extraction
         for field in "error" "message" "error_description" "detail"; do
-            local error_msg
             error_msg=$(dns_json_get "$response" "$field")
             if [ -n "$error_msg" ]; then
                 echo "$error_msg"
@@ -554,21 +511,21 @@ dns_extract_error() {
 
 # Enhanced DNS propagation checking with multiple strategies
 dns_check_propagation() {
-    local domain="$1"
-    local expected_value="$2"
-    local max_wait="${3:-$DEFAULT_PROPAGATION_WAIT}"
-    local check_interval="${4:-10}"
+    domain="$1"
+    expected_value="$2"
+    max_wait="${3:-$DEFAULT_PROPAGATION_WAIT}"
+    check_interval="${4:-10}"
 
     dns_log_info "Checking DNS propagation for _acme-challenge.$domain"
 
-    local waited=0
+    waited=0
     # Multiple resolver sets for comprehensive checking
-    local public_resolvers="8.8.8.8 1.1.1.1 208.67.222.222 9.9.9.9"
-    local backup_resolvers="8.8.4.4 1.0.0.1 208.67.220.220 149.112.112.112"
+    public_resolvers="8.8.8.8 1.1.1.1 208.67.222.222 9.9.9.9"
+    backup_resolvers="8.8.4.4 1.0.0.1 208.67.220.220 149.112.112.112"
 
     # Start with authoritative nameserver check if available
-    local auth_ns=""
-    if command -v dig >/dev/null 2>&1; then
+    auth_ns=""
+    if which dig >/dev/null 2>&1; then
         auth_ns=$(dig +short NS "$domain" 2>/dev/null | head -1)
         if [ -n "$auth_ns" ]; then
             # Remove trailing dot
@@ -578,9 +535,9 @@ dns_check_propagation() {
     fi
 
     while [ $waited -lt $max_wait ]; do
-        local found=0
-        local total_resolvers=0
-        local resolvers_to_check="$public_resolvers"
+        found=0
+        total_resolvers=0
+        resolvers_to_check="$public_resolvers"
 
         # Check authoritative nameserver first if available
         if [ -n "$auth_ns" ]; then
@@ -601,7 +558,7 @@ dns_check_propagation() {
         done
 
         # If not enough resolvers agree, try backup resolvers
-        local required=$((total_resolvers / 2 + 1))
+        required=$((total_resolvers / 2 + 1))
         if [ $found -lt $required ] && [ $waited -gt $((max_wait / 2)) ]; then
             dns_log_debug "Trying backup resolvers for additional confirmation"
             for resolver in $backup_resolvers; do
@@ -630,16 +587,16 @@ dns_check_propagation() {
 
 # Helper function to query a specific resolver
 dns_query_resolver() {
-    local resolver="$1"
-    local domain="$2"
-    local expected_value="$3"
+    resolver="$1"
+    domain="$2"
+    expected_value="$3"
 
-    local result=""
+    result=""
 
     # Use dig if available, fallback to nslookup
-    if command -v dig >/dev/null 2>&1; then
+    if which dig >/dev/null 2>&1; then
         result=$(dig @"$resolver" TXT "_acme-challenge.$domain" +short +timeout=5 +tries=1 2>/dev/null | sed 's/"//g' | head -1)
-    elif command -v nslookup >/dev/null 2>&1; then
+    elif which nslookup >/dev/null 2>&1; then
         # nslookup with timeout (ESXi compatible)
         result=$(timeout 10 nslookup -type=TXT "_acme-challenge.$domain" "$resolver" 2>/dev/null | grep -o '"[^\"]*"' | sed 's/"//g' | head -1)
     else
@@ -652,22 +609,22 @@ dns_query_resolver() {
 
 # DNS cache busting - force fresh queries
 dns_flush_cache() {
-    local domain="$1"
+    domain="$1"
 
     dns_log_debug "Attempting to flush DNS cache for $domain"
 
     # Try various cache-busting techniques
-    if command -v systemd-resolve >/dev/null 2>&1; then
+    if which systemd-resolve >/dev/null 2>&1; then
         systemd-resolve --flush-caches 2>/dev/null || true
-    elif command -v resolvectl >/dev/null 2>&1; then
+    elif which resolvectl >/dev/null 2>&1; then
         resolvectl flush-caches 2>/dev/null || true
     elif [ -f /etc/init.d/nscd ]; then
         /etc/init.d/nscd restart 2>/dev/null || true
     fi
 
     # Add random query to bust caches
-    local random_subdomain="cache-bust-$(date +%s)"
-    if command -v dig >/dev/null 2>&1; then
+    random_subdomain="cache-bust-$(date +%s)"
+    if which dig >/dev/null 2>&1; then
         dig "$random_subdomain.$domain" +short >/dev/null 2>&1 || true
     fi
 }
@@ -682,8 +639,8 @@ dns_init_esxi_environment() {
     DNS_USE_FILE_CACHE=0                      # Always disabled for ESXi read-only filesystem
 
     # Check memory constraints specific to ESXi
-    local free_mem
-    if command -v free >/dev/null 2>&1; then
+    free_mem=""
+    if which free >/dev/null 2>&1; then
         free_mem=$(free 2>/dev/null | awk '/^Mem:/ {print $4}' 2>/dev/null)
         if [ -n "$free_mem" ] && [ "$free_mem" -lt 100000 ]; then  # Less than ~100MB
             dns_log_debug "ESXi memory constrained (${free_mem}K) - using shorter cache TTL"
@@ -699,7 +656,7 @@ SUPPORTED_PROVIDERS="cloudflare route53 digitalocean namecheap godaddy powerdns 
 
 # Provider loading and validation
 dns_load_provider() {
-    local provider="$1"
+    provider="$1"
 
     if [ -z "$provider" ]; then
         dns_log_error "No DNS provider specified"
@@ -707,7 +664,7 @@ dns_load_provider() {
     fi
 
     # Check if provider is supported
-    local supported=false
+    supported=false
     for p in $SUPPORTED_PROVIDERS; do
         if [ "$p" = "$provider" ]; then
             supported=true
@@ -722,80 +679,85 @@ dns_load_provider() {
     fi
 
     # Load provider script
-    local provider_script="$SCRIPT_DIR/dns_${provider}.sh"
+    provider_script="$DNSAPIDIR/dns_${provider}.sh"
 
+    # Debug: Check provider script permissions and type
+    ls -l "$provider_script" >&2
+    if [ -x "$provider_script" ]; then
+        echo "[DNS-WARN] Provider script $provider_script is executable. It should NOT be executable; it is meant to be sourced, not run directly." >&2
+    fi
+
+    dns_log_debug "Checking for provider script: $provider_script"
     if [ ! -f "$provider_script" ]; then
         dns_log_error "Provider script not found: $provider_script"
+        ls -l "$DNSAPIDIR" >&2
+        return 1
+    fi
+    if [ ! -r "$provider_script" ]; then
+        dns_log_error "Provider script is not readable: $provider_script"
+        ls -l "$provider_script" >&2
         return 1
     fi
 
-    dns_log_debug "Loading DNS provider: $provider"
+    dns_log_debug "Loading DNS provider: $provider from $provider_script"
     . "$provider_script"
-
-    # Validate required functions exist
-    if ! command -v "dns_${provider}_add" >/dev/null 2>&1; then
-        dns_log_error "Provider $provider missing dns_${provider}_add function"
+    source_status=$?
+    if [ $source_status -ne 0 ]; then
+        dns_log_error "Failed to source provider script: $provider_script (exit code $source_status)"
         return 1
     fi
 
-    if ! command -v "dns_${provider}_rm" >/dev/null 2>&1; then
-        dns_log_error "Provider $provider missing dns_${provider}_rm function"
-        return 1
-    fi
-
+    dns_log_debug "Provider $provider loaded (function checks skipped)."
     return 0
 }
 
 # Provider wrapper functions with retry logic
 dns_provider_add() {
-    local provider="$1"
-    local domain="$2"
-    local txt_value="$3"
-    local retries=0
-
+    provider="$1"
+    domain="$2"
+    txt_value="$3"
+    retries=0
+    func="dns_${provider}_add"
     while [ $retries -lt $DEFAULT_MAX_RETRIES ]; do
-        if "dns_${provider}_add" "$domain" "$txt_value"; then
+        if $func "$domain" "$txt_value"; then
             return 0
         fi
-
         retries=$((retries + 1))
         if [ $retries -lt $DEFAULT_MAX_RETRIES ]; then
             dns_log_warn "DNS add attempt $retries failed, retrying in $DEFAULT_RETRY_DELAY seconds..."
             sleep $DEFAULT_RETRY_DELAY
         fi
     done
-
     dns_log_error "Failed to add DNS record after $DEFAULT_MAX_RETRIES attempts"
     return 1
 }
 
 dns_provider_rm() {
-    local provider="$1"
-    local domain="$2"
-    local txt_value="$3"
-    local retries=0
-
+    provider="$1"
+    domain="$2"
+    txt_value="$3"
+    retries=0
+    func="dns_${provider}_rm"
     while [ $retries -lt $DEFAULT_MAX_RETRIES ]; do
-        if "dns_${provider}_rm" "$domain" "$txt_value"; then
+        if $func "$domain" "$txt_value"; then
             return 0
         fi
-
         retries=$((retries + 1))
         if [ $retries -lt $DEFAULT_MAX_RETRIES ]; then
             dns_log_warn "DNS remove attempt $retries failed, retrying in $DEFAULT_RETRY_DELAY seconds..."
             sleep $DEFAULT_RETRY_DELAY
         fi
     done
-
     dns_log_error "Failed to remove DNS record after $DEFAULT_MAX_RETRIES attempts"
     return 1
 }
 
 dns_provider_test() {
-    local provider="$1"
-
-    if command -v "dns_${provider}_test" >/dev/null 2>&1; then
-        "dns_${provider}_test"
+    provider="$1"
+    func="dns_${provider}_test"
+    # Call the function and handle if not defined
+    if type "$func" 2>/dev/null | grep -q 'function'; then
+        $func
     else
         dns_log_warn "Provider $provider does not support testing"
         return 0
@@ -803,10 +765,11 @@ dns_provider_test() {
 }
 
 dns_provider_info() {
-    local provider="$1"
-
-    if command -v "dns_${provider}_info" >/dev/null 2>&1; then
-        "dns_${provider}_info"
+    provider="$1"
+    func="dns_${provider}_info"
+    # Call the function and handle if not defined
+    if type "$func" 2>/dev/null | grep -q 'function'; then
+        $func
     else
         echo "DNS Provider: $provider"
         echo "No additional information available"
@@ -815,8 +778,8 @@ dns_provider_info() {
 
 # Command handlers
 dns_cmd_add() {
-    local domain="$1"
-    local txt_value="$2"
+    domain="$1"
+    txt_value="$2"
 
     if ! dns_validate_domain "$domain"; then
         return 1
@@ -836,8 +799,24 @@ dns_cmd_add() {
     fi
 
     dns_log_info "Adding DNS TXT record for $domain using $DNS_PROVIDER"
+    dns_log_debug "[GLOBAL] Entering provider add logic for $domain"
 
-    if dns_provider_add "$DNS_PROVIDER" "$domain" "$txt_value"; then
+    DNS_ADD_TIMEOUT="${DNS_ADD_TIMEOUT:-120}"
+    add_exit_code=1
+
+    # Always run in current shell for function scope
+    start_time=$(date +%s)
+    dns_provider_add "$DNS_PROVIDER" "$domain" "$txt_value"
+    add_exit_code=$?
+    end_time=$(date +%s)
+    elapsed=$((end_time - start_time))
+    if [ $elapsed -gt "$DNS_ADD_TIMEOUT" ]; then
+        dns_log_warn "Provider add operation exceeded timeout of ${DNS_ADD_TIMEOUT}s (ran ${elapsed}s)"
+    fi
+
+    dns_log_debug "[GLOBAL] Exited provider add logic for $domain with exit code $add_exit_code"
+
+    if [ $add_exit_code -eq 0 ]; then
         dns_log_info "DNS record added successfully"
 
         # Wait for propagation if configured
@@ -858,8 +837,8 @@ dns_cmd_add() {
 }
 
 dns_cmd_rm() {
-    local domain="$1"
-    local txt_value="$2"
+    domain="$1"
+    txt_value="$2"
 
     if ! dns_validate_domain "$domain"; then
         return 1
@@ -907,7 +886,7 @@ dns_cmd_test() {
 }
 
 dns_cmd_info() {
-    local provider="${1:-$DNS_PROVIDER}"
+    provider="${1:-$DNS_PROVIDER}"
 
     if [ -z "$provider" ]; then
         dns_log_error "No DNS provider specified"
@@ -929,7 +908,7 @@ dns_cmd_list() {
 
     for provider in $SUPPORTED_PROVIDERS; do
         echo "- $provider"
-        if [ -f "$SCRIPT_DIR/dns_${provider}.sh" ]; then
+        if [ -f "$DNSAPIDIR/dns_${provider}.sh" ]; then
             echo "  Status: Available"
         else
             echo "  Status: Missing provider script"
@@ -946,10 +925,10 @@ dns_cmd_list() {
 
 # Main function
 main() {
-    local command="$1"
-    local domain="$2"
-    local token="$3"
-    local key_auth="$4"
+    command="$1"
+    domain="$2"
+    token="$3"
+    key_auth="$4"
 
     # Show usage if no command provided
     if [ -z "$command" ]; then

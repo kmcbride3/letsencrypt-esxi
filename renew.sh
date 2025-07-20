@@ -28,6 +28,27 @@ if [ -r "$LOCALDIR/renew.cfg" ]; then
   . "$LOCALDIR/renew.cfg"
 fi
 
+export DOMAIN
+export RENEW_DAYS
+export CHALLENGE_TYPE
+export DNS_PROVIDER
+export DNS_PROPAGATION_WAIT
+export CF_API_TOKEN
+export CF_API_KEY
+export CF_EMAIL
+export AWS_ACCESS_KEY_ID
+export AWS_SECRET_ACCESS_KEY
+export AWS_DEFAULT_REGION
+export DIRECTORY_URL
+export CONTACT_EMAIL
+export ACCOUNTKEY
+export KEY
+export CSR
+export CRT
+export VMWARE_CRT
+export VMWARE_KEY
+export SSL_CERT_FILE
+
 log() {
    echo "$@"
    logger -p daemon.info -t "$0" "$@"
@@ -247,67 +268,16 @@ fi
 # Cleanup firewall rules (also handled by trap, but explicit cleanup for clarity)
 cleanup_firewall
 
-# Restart services that need to reload SSL certificates
-log "Restarting ESXi services to reload certificates..."
-
-# Function to safely restart a service
-restart_service_safely() {
-    local service_path="$1"
-    local service_name=$(basename "$service_path")
-
-    # Skip problematic files and services
-    case "$service_name" in
-        README*|*.md|*.txt|*.conf|*.bak|*.orig|*.log)
-            return 0
-            ;;
-        ibm_pciinfo_provider_autorun.sh)
-            # This service has known output issues, skip it
-            return 0
-            ;;
-    esac
-
-    # Check if file is executable
-    if [ ! -x "$service_path" ]; then
-        return 0
-    fi
-
-    # Try to restart the service, suppressing common error messages
-    if "$service_path" ssl_reset 2>/dev/null; then
-        log "Restarted $service_name successfully"
-        return 0
-    fi
-
-    return 1
-}
-
-# Find and restart services that support ssl_reset
-restarted_count=0
-for service in /etc/init.d/*; do
-    # Only process if it's a file (not a directory)
-    if [ -f "$service" ]; then
-        if restart_service_safely "$service"; then
-            restarted_count=$((restarted_count + 1))
+# Restart hostd and vpxa to ensure new cert is fully applied
+log "Restarting hostd and vpxa to reload certificates..."
+for svc in hostd vpxa; do
+    if /etc/init.d/$svc restart >/dev/null 2>&1; then
+        if [ "$DEBUG" = "1" ]; then
+            log "Successfully restarted $svc"
         fi
+    else
+        log "Warning: Failed to restart $svc (non-critical)"
     fi
 done
 
-# If no services were restarted via ssl_reset, try critical services manually
-if [ "$restarted_count" -eq 0 ]; then
-    log "No ssl_reset services found, restarting critical services manually..."
-
-    # Critical ESXi services that need certificate reload
-    for service_name in hostd vpxa rhttpproxy; do
-        service_path="/etc/init.d/$service_name"
-        if [ -x "$service_path" ]; then
-            log "Restarting $service_name..."
-            if "$service_path" restart >/dev/null 2>&1; then
-                log "Successfully restarted $service_name"
-                restarted_count=$((restarted_count + 1))
-            else
-                log "Warning: Failed to restart $service_name (non-critical)"
-            fi
-        fi
-    done
-fi
-
-log "Service restart complete. Restarted $restarted_count services."
+log "Service restart complete. hostd and vpxa restarted."

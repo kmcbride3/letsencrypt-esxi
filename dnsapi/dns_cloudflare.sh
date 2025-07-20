@@ -1,5 +1,3 @@
-#!/bin/sh
-#
 # Cloudflare DNS API Provider
 # Requires: CF_API_TOKEN or CF_API_KEY + CF_EMAIL
 #
@@ -30,11 +28,11 @@ CF_PROXY=${CF_PROXY:-false}
 
 # Authentication setup
 _cf_setup_auth() {
-    if [ -n "$CF_API_TOKEN" ]; then
+    if [ -n "${CF_API_TOKEN:-}" ]; then
         dns_log_debug "Using Cloudflare API Token authentication"
         CF_AUTH_HEADER="Authorization: Bearer $CF_API_TOKEN"
         return 0
-    elif [ -n "$CF_API_KEY" ] && [ -n "$CF_EMAIL" ]; then
+    elif [ -n "${CF_API_KEY:-}" ] && [ -n "${CF_EMAIL:-}" ]; then
         dns_log_debug "Using Cloudflare Global API Key authentication"
         CF_AUTH_HEADER="X-Auth-Key: $CF_API_KEY"
         CF_EMAIL_HEADER="X-Auth-Email: $CF_EMAIL"
@@ -45,81 +43,92 @@ _cf_setup_auth() {
     fi
 }
 
+# Helper: Extract base domain from FQDN (e.g., sub.domain.example.com -> example.com)
+cf_get_base_domain() {
+    fqdn="$1"
+    # Use awk to get the last two labels (handles most cases)
+    echo "$fqdn" | awk -F. '{if (NF>=2) print $(NF-1)"."$NF; else print $0}'
+}
+
 # Get zone ID for domain
 _cf_get_zone_id() {
-    local domain="$1"
+    domain="$1"
+    base_domain="$(cf_get_base_domain "$domain")"
 
+    dns_log_debug "[CF] Looking up zone for base domain: $base_domain"
     # Try exact match first
-    local zone_response
-    if [ -n "$CF_EMAIL_HEADER" ]; then
-        zone_response=$(dns_http_get "$CF_API_BASE/zones?name=$domain" "$CF_AUTH_HEADER
-$CF_EMAIL_HEADER
-Content-Type: application/json")
-    else
-        zone_response=$(dns_http_get "$CF_API_BASE/zones?name=$domain" "$CF_AUTH_HEADER
-Content-Type: application/json")
-    fi
+    zone_response=""
+    headers="$CF_AUTH_HEADER"
+    [ -n "$CF_EMAIL_HEADER" ] && headers="$headers
+$CF_EMAIL_HEADER"
+    headers="$headers
+Content-Type: application/json"
+    zone_response=$(dns_http_get "$CF_API_BASE/zones?name=$base_domain" "$headers")
+    dns_log_debug "[CF] Zone lookup response: $zone_response"
 
-    local zone_id=$(dns_json_get "$zone_response" "result.0.id")
+    zone_id=$(dns_json_get "$zone_response" "result.0.id")
 
     if [ -n "$zone_id" ] && [ "$zone_id" != "null" ]; then
+        dns_log_debug "[CF] Found zone_id: $zone_id for $base_domain"
         echo "$zone_id"
         return 0
     fi
 
-    # Try parent domains
-    local parent_domain="$domain"
+    # Try parent domains (should rarely be needed)
+    parent_domain="$base_domain"
     while [ "$(echo "$parent_domain" | awk -F'.' '{print NF}')" -gt 2 ]; do
         parent_domain=$(echo "$parent_domain" | cut -d. -f2-)
-
+        dns_log_debug "[CF] Trying parent domain: $parent_domain"
         if [ -n "$CF_EMAIL_HEADER" ]; then
-            zone_response=$(dns_http_get "$CF_API_BASE/zones?name=$parent_domain" "$CF_AUTH_HEADER
+            headers="$CF_AUTH_HEADER
 $CF_EMAIL_HEADER
-Content-Type: application/json")
+Content-Type: application/json"
         else
-            zone_response=$(dns_http_get "$CF_API_BASE/zones?name=$parent_domain" "$CF_AUTH_HEADER
-Content-Type: application/json")
+            headers="$CF_AUTH_HEADER
+Content-Type: application/json"
         fi
-
+        zone_response=$(dns_http_get "$CF_API_BASE/zones?name=$parent_domain" "$headers")
+        dns_log_debug "[CF] Parent zone lookup response: $zone_response"
         zone_id=$(dns_json_get "$zone_response" "result.0.id")
-
         if [ -n "$zone_id" ] && [ "$zone_id" != "null" ]; then
+            dns_log_debug "[CF] Found parent zone_id: $zone_id for $parent_domain"
             echo "$zone_id"
             return 0
         fi
     done
 
-    dns_log_error "Could not find Cloudflare zone for domain: $domain"
+    dns_log_error "Could not find Cloudflare zone for domain: $base_domain"
     return 1
 }
 
 # Get existing TXT record ID
 _cf_get_txt_record_id() {
-    local zone_id="$1"
-    local record_name="$2"
-    local txt_value="$3"
+    zone_id="$1"
+    record_name="$2"
+    txt_value="$3"
 
-    local records_response
-    if [ -n "$CF_EMAIL_HEADER" ]; then
-        records_response=$(dns_http_get "$CF_API_BASE/zones/$zone_id/dns_records?type=TXT&name=$record_name" "$CF_AUTH_HEADER
-$CF_EMAIL_HEADER
-Content-Type: application/json")
-    else
-        records_response=$(dns_http_get "$CF_API_BASE/zones/$zone_id/dns_records?type=TXT&name=$record_name" "$CF_AUTH_HEADER
-Content-Type: application/json")
-    fi
+    dns_log_debug "[CF] Looking for TXT record in zone $zone_id with name $record_name and value $txt_value"
+    records_response=""
+    headers="$CF_AUTH_HEADER"
+    [ -n "$CF_EMAIL_HEADER" ] && headers="$headers
+$CF_EMAIL_HEADER"
+    headers="$headers
+Content-Type: application/json"
+    records_response=$(dns_http_get "$CF_API_BASE/zones/$zone_id/dns_records?type=TXT&name=$record_name" "$headers")
+    dns_log_debug "[CF] TXT record lookup response: $records_response"
 
-    # Find record with matching content
-    local i=0
-    while true; do
-        local record_id=$(dns_json_get "$records_response" "result.$i.id")
-        local record_content=$(dns_json_get "$records_response" "result.$i.content")
+    i=0
+    max_iter=20
+    while [ $i -lt $max_iter ]; do
+        record_id=$(dns_json_get "$records_response" "result.$i.id")
+        record_content=$(dns_json_get "$records_response" "result.$i.content")
 
         if [ -z "$record_id" ] || [ "$record_id" = "null" ]; then
             break
         fi
 
         if [ "$record_content" = "$txt_value" ]; then
+            dns_log_debug "[CF] Found matching TXT record id: $record_id"
             echo "$record_id"
             return 0
         fi
@@ -127,29 +136,37 @@ Content-Type: application/json")
         i=$((i + 1))
     done
 
+    if [ $i -ge $max_iter ]; then
+        dns_log_warn "[CF] TXT record search exceeded $max_iter iterations, possible malformed API response."
+    fi
+
     return 1
 }
 
 # Add TXT record
 dns_cloudflare_add() {
-    local domain="$1"
-    local txt_value="$2"
+    domain="$1"
+    txt_value="$2"
 
+    dns_log_debug "[CF] Starting dns_cloudflare_add for $domain"
     _cf_setup_auth || return 1
 
-    local record_name="_acme-challenge.$domain"
-    local zone_id
+    record_name="_acme-challenge.$domain"
+    zone_id=""
 
-    # Get zone ID
-    zone_id=$(_cf_get_zone_id "$domain")
+    # Always use base domain for zone lookup
+    base_domain="$(cf_get_base_domain "$domain")"
+    dns_log_debug "[CF] Using base domain for zone lookup: $base_domain"
+    zone_id=$(_cf_get_zone_id "$base_domain")
     if [ -z "$zone_id" ]; then
+        dns_log_error "[CF] No zone_id found for $base_domain"
         return 1
     fi
 
-    dns_log_debug "Found Cloudflare zone ID: $zone_id"
+    dns_log_debug "[CF] Found Cloudflare zone ID: $zone_id"
 
     # Check if record already exists
-    local existing_record_id
+    existing_record_id=""
     existing_record_id=$(_cf_get_txt_record_id "$zone_id" "$record_name" "$txt_value")
 
     if [ -n "$existing_record_id" ]; then
@@ -159,34 +176,37 @@ dns_cloudflare_add() {
     fi
 
     # Create new TXT record
-    local record_data="{
-        \"type\": \"TXT\",
-        \"name\": \"$record_name\",
-        \"content\": \"$txt_value\",
-        \"ttl\": $CF_TTL,
-        \"proxied\": $CF_PROXY
-    }"
+    record_data="{\n        \"type\": \"TXT\",\n        \"name\": \"$record_name\",\n        \"content\": \"$txt_value\",\n        \"ttl\": $CF_TTL,\n        \"proxied\": $CF_PROXY\n    }"
 
-    local create_response
-    if [ -n "$CF_EMAIL_HEADER" ]; then
-        create_response=$(dns_http_post "$CF_API_BASE/zones/$zone_id/dns_records" "$record_data" "$CF_AUTH_HEADER
-$CF_EMAIL_HEADER
-Content-Type: application/json")
-    else
-        create_response=$(dns_http_post "$CF_API_BASE/zones/$zone_id/dns_records" "$record_data" "$CF_AUTH_HEADER
-Content-Type: application/json")
-    fi
+    dns_log_debug "[CF] Creating new TXT record: $record_data"
+    create_response=""
+    headers="$CF_AUTH_HEADER"
+    [ -n "$CF_EMAIL_HEADER" ] && headers="$headers
+$CF_EMAIL_HEADER"
+    headers="$headers
+Content-Type: application/json"
+    create_response=$(dns_http_post "$CF_API_BASE/zones/$zone_id/dns_records" "$record_data" "$headers")
+    dns_log_debug "[CF] TXT record create response: $create_response"
 
-    local record_id=$(dns_json_get "$create_response" "result.id")
-    local success=$(dns_json_get "$create_response" "success")
+    record_id=$(dns_json_get "$create_response" "result.id")
+    success=$(dns_json_get "$create_response" "success")
+    # Normalize success to lowercase for comparison (BusyBox/ESXi compatible)
+    success_lc=$(echo "$success" | sed 'y/ABCDEFGHIJKLMNOPQRSTUVWXYZ/abcdefghijklmnopqrstuvwxyz/')
 
-    if [ "$success" = "true" ] && [ -n "$record_id" ]; then
+    if { [ "$success_lc" = "true" ] || [ "$success" = "1" ]; } && [ -n "$record_id" ] && [ "$record_id" != "null" ]; then
         dns_log_info "Created Cloudflare TXT record: $record_id"
         echo "$record_id" > "/tmp/acme_cf_record_${domain}.id"
         echo "$zone_id" > "/tmp/acme_cf_zone_${domain}.id"
         return 0
     else
-        local error_msg=$(dns_json_get "$create_response" "errors.0.message")
+        error_msg=$(dns_json_get "$create_response" "errors.0.message")
+        # Fallback: if no error message but record_id exists, treat as success
+        if [ -z "$error_msg" ] && [ -n "$record_id" ] && [ "$record_id" != "null" ]; then
+            dns_log_info "Created Cloudflare TXT record (fallback): $record_id"
+            echo "$record_id" > "/tmp/acme_cf_record_${domain}.id"
+            echo "$zone_id" > "/tmp/acme_cf_zone_${domain}.id"
+            return 0
+        fi
         dns_log_error "Failed to create Cloudflare TXT record: $error_msg"
         return 1
     fi
@@ -194,17 +214,17 @@ Content-Type: application/json")
 
 # Remove TXT record
 dns_cloudflare_rm() {
-    local domain="$1"
-    local txt_value="$2"
+    domain="$1"
+    txt_value="$2"
 
     _cf_setup_auth || return 1
 
-    local record_file="/tmp/acme_cf_record_${domain}.id"
-    local zone_file="/tmp/acme_cf_zone_${domain}.id"
+    record_file="/tmp/acme_cf_record_${domain}.id"
+    zone_file="/tmp/acme_cf_zone_${domain}.id"
 
     # Try to get record ID from file first
-    local record_id=""
-    local zone_id=""
+    record_id=""
+    zone_id=""
 
     if [ -f "$record_file" ]; then
         record_id=$(cat "$record_file" 2>/dev/null)
@@ -216,7 +236,8 @@ dns_cloudflare_rm() {
 
     # If we don't have the IDs, try to find them
     if [ -z "$zone_id" ]; then
-        zone_id=$(_cf_get_zone_id "$domain")
+        base_domain="$(cf_get_base_domain "$domain")"
+        zone_id=$(_cf_get_zone_id "$base_domain")
         if [ -z "$zone_id" ]; then
             dns_log_warn "Could not find zone ID for cleanup"
             rm -f "$record_file" "$zone_file"
@@ -231,22 +252,19 @@ dns_cloudflare_rm() {
     if [ -n "$record_id" ] && [ "$record_id" != "null" ]; then
         dns_log_debug "Deleting Cloudflare record ID: $record_id"
 
-        local delete_response
+        delete_response=""
         if [ -n "$CF_EMAIL_HEADER" ]; then
-            delete_response=$(dns_http_delete "$CF_API_BASE/zones/$zone_id/dns_records/$record_id" "$CF_AUTH_HEADER
-$CF_EMAIL_HEADER
-Content-Type: application/json")
+            delete_response=$(dns_http_delete "$CF_API_BASE/zones/$zone_id/dns_records/$record_id" "$CF_AUTH_HEADER" "$CF_EMAIL_HEADER" "Content-Type: application/json")
         else
-            delete_response=$(dns_http_delete "$CF_API_BASE/zones/$zone_id/dns_records/$record_id" "$CF_AUTH_HEADER
-Content-Type: application/json")
+            delete_response=$(dns_http_delete "$CF_API_BASE/zones/$zone_id/dns_records/$record_id" "$CF_AUTH_HEADER" "Content-Type: application/json")
         fi
 
-        local success=$(dns_json_get "$delete_response" "success")
+        success=$(dns_json_get "$delete_response" "success")
 
         if [ "$success" = "true" ]; then
             dns_log_info "Deleted Cloudflare TXT record"
         else
-            local error_msg=$(dns_json_get "$delete_response" "errors.0.message")
+            error_msg=$(dns_json_get "$delete_response" "errors.0.message")
             dns_log_warn "Failed to delete Cloudflare TXT record: $error_msg"
         fi
     else
@@ -260,8 +278,8 @@ Content-Type: application/json")
 
 # Check if zone exists (override default implementation)
 dns_zone_exists() {
-    local zone="$1"
-    local provider="$2"
+    zone="$1"
+    provider="$2"
 
     if [ "$provider" != "cloudflare" ]; then
         return 1
@@ -269,52 +287,50 @@ dns_zone_exists() {
 
     _cf_setup_auth || return 1
 
-    local zone_id
-    zone_id=$(_cf_get_zone_id "$zone")
+    base_domain="$(cf_get_base_domain "$zone")"
+    zone_id=$(_cf_get_zone_id "$base_domain")
 
     [ -n "$zone_id" ]
 }
 
 # Get zone for domain (override default implementation)
 dns_cloudflare_get_zone() {
-    local domain="$1"
+    domain="$1"
 
     _cf_setup_auth || return 1
 
+    base_domain="$(cf_get_base_domain "$domain")"
     # Try exact match first
-    local zone_response
-    if [ -n "$CF_EMAIL_HEADER" ]; then
-        zone_response=$(dns_http_get "$CF_API_BASE/zones?name=$domain" "$CF_AUTH_HEADER
-$CF_EMAIL_HEADER
-Content-Type: application/json")
-    else
-        zone_response=$(dns_http_get "$CF_API_BASE/zones?name=$domain" "$CF_AUTH_HEADER
-Content-Type: application/json")
-    fi
+    zone_response=""
+    # Fix: Pass all headers as a single string, not as multiple arguments
+    headers="$CF_AUTH_HEADER"
+    [ -n "$CF_EMAIL_HEADER" ] && headers="$headers
+$CF_EMAIL_HEADER"
+    headers="$headers
+Content-Type: application/json"
+    zone_response=$(dns_http_get "$CF_API_BASE/zones?name=$base_domain" "$headers")
 
-    local zone_name=$(dns_json_get "$zone_response" "result.0.name")
+    zone_name=$(dns_json_get "$zone_response" "result.0.name")
 
     if [ -n "$zone_name" ] && [ "$zone_name" != "null" ]; then
         echo "$zone_name"
         return 0
     fi
 
-    # Try parent domains
-    local parent_domain="$domain"
+    # Try parent domains (should rarely be needed)
+    parent_domain="$base_domain"
     while [ "$(echo "$parent_domain" | awk -F'.' '{print NF}')" -gt 2 ]; do
         parent_domain=$(echo "$parent_domain" | cut -d. -f2-)
-
         if [ -n "$CF_EMAIL_HEADER" ]; then
-            zone_response=$(dns_http_get "$CF_API_BASE/zones?name=$parent_domain" "$CF_AUTH_HEADER
+            headers="$CF_AUTH_HEADER
 $CF_EMAIL_HEADER
-Content-Type: application/json")
+Content-Type: application/json"
         else
-            zone_response=$(dns_http_get "$CF_API_BASE/zones?name=$parent_domain" "$CF_AUTH_HEADER
-Content-Type: application/json")
+            headers="$CF_AUTH_HEADER
+Content-Type: application/json"
         fi
-
+        zone_response=$(dns_http_get "$CF_API_BASE/zones?name=$parent_domain" "$headers")
         zone_name=$(dns_json_get "$zone_response" "result.0.name")
-
         if [ -n "$zone_name" ] && [ "$zone_name" != "null" ]; then
             echo "$zone_name"
             return 0

@@ -88,10 +88,11 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, disable_check=False, directo
             'ACME_CHALLENGE_TYPE': challenge_type,
             'ACME_DOMAIN': domain,
             'ACME_TOKEN': token,
-            'ACME_KEY_AUTH': key_auth or ''
+            'ACME_KEY_AUTH': key_auth or '',
+            'DNS_PROVIDER': os.environ.get('DNS_PROVIDER', '')
         })
 
-        cmd = [api_script, action, domain, token, key_auth or '']
+        cmd = ["/bin/sh",api_script, action, domain, token, key_auth or '']
         proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         stdout, stderr = proc.communicate()
 
