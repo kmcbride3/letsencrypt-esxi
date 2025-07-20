@@ -1,15 +1,13 @@
-#!/bin/sh
-#
-# Manual DNS Provider
+# Manual DNS API Provider
 # For testing or when automatic DNS management is not available
 #
 
 # Provider information
 dns_manual_info() {
-    echo "Manual DNS Provider"
+    echo "Manual DNS API Provider"
     echo "Description: Interactive manual DNS record management"
     echo ""
-    echo "⚠️  WARNING: This provider requires manual interaction and is NOT suitable"
+    echo "WARNING: This provider requires manual interaction and is NOT suitable"
     echo "    for automated certificate renewals (cron jobs, etc.)"
     echo ""
     echo "This provider requires manual intervention to:"
@@ -40,13 +38,13 @@ MANUAL_TTL=${MANUAL_TTL:-120}
 MANUAL_AUTO_CONTINUE=${MANUAL_AUTO_CONTINUE:-false}
 
 # Add TXT record
+# Usage: dns_manual_add <domain> <txt_value>
 dns_manual_add() {
-    local domain="$1"
-    local txt_value="$2"
+    domain="$1"
+    txt_value="$2"
+    record_name="_acme-challenge.$domain"
 
-    local record_name="_acme-challenge.$domain"
-
-    echo ""
+    dns_log_info "Manual DNS Challenge Setup Required for $domain"
     echo "============================================"
     echo "Manual DNS Challenge Setup Required"
     echo "============================================"
@@ -72,9 +70,8 @@ dns_manual_add() {
     fi
 
     echo "Press Enter when the record is created and has propagated..."
-    read -r
+    read dummy
 
-    # Verify DNS propagation
     dns_log_info "Verifying DNS propagation..."
     if dns_check_propagation "$domain" "$txt_value" 180 15; then
         dns_log_info "DNS propagation verified successfully"
@@ -88,42 +85,37 @@ dns_manual_add() {
         echo "- Different DNS resolvers"
         echo ""
         echo "Press Enter to continue anyway, or Ctrl+C to abort..."
-        read -r
+        read dummy
         return 0
     fi
 }
 
 # Remove TXT record
+# Usage: dns_manual_rm <domain> <txt_value>
 dns_manual_rm() {
-    local domain="$1"
-    local txt_value="$2"
+    domain="$1"
+    txt_value="$2"
+    record_name="_acme-challenge.$domain"
 
-    local record_name="_acme-challenge.$domain"
-
-    echo ""
+    dns_log_info "Manual DNS Challenge Cleanup for $domain"
     echo "============================================"
     echo "Manual DNS Challenge Cleanup"
     echo "============================================"
     echo "Domain: $domain"
     echo "Record Type: TXT"
     echo "Record Name: $record_name"
-
     if [ -n "$txt_value" ]; then
         echo "Record Value: $txt_value"
     fi
-
     echo ""
     echo "You can now remove the TXT record from your DNS provider."
     echo "This is optional as the record is no longer needed."
     echo ""
-
     if [ "$MANUAL_AUTO_CONTINUE" = "true" ]; then
         dns_log_info "Auto-continue mode enabled, cleanup message displayed"
         return 0
     fi
-
     echo "Press Enter to continue..."
-    read -r
-
+    read dummy
     return 0
 }
