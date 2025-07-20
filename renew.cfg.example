@@ -35,7 +35,7 @@
 #           duckdns, ns1, gcloud, azure, manual
 #DNS_PROVIDER="cloudflare"
 
-# ⚠️  WARNING: The "manual" provider requires user interaction and will NOT work
+#    WARNING: The "manual" provider requires user interaction and will NOT work
 #    with automated renewals (cron jobs). Use only for testing or one-time
 #    certificate generation. For production ESXi deployments, use an automated
 #    provider like cloudflare, route53, gcloud, azure, etc.

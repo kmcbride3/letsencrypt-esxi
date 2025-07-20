@@ -243,11 +243,49 @@ def main(argv=None):
     if args.challenge_type == "http-01" and not args.acme_dir:
         parser.error("--acme-dir is required for http-01 challenge")
     LOGGER.setLevel(args.quiet or LOGGER.level)
-    signed_crt = get_crt(args.account_key, args.csr, args.acme_dir, log=LOGGER,
-                        disable_check=args.disable_check, directory_url=args.directory_url,
-                        contact=args.contact, check_port=args.check_port,
-                        challenge_type=args.challenge_type, timeout=args.timeout)
-    sys.stdout.write(signed_crt)
+    try:
+        signed_crt = get_crt(args.account_key, args.csr, args.acme_dir, log=LOGGER,
+                            disable_check=args.disable_check, directory_url=args.directory_url,
+                            contact=args.contact, check_port=args.check_port,
+                            challenge_type=args.challenge_type, timeout=args.timeout)
+        sys.stdout.write(signed_crt)
+    except ValueError as e:
+        msg = str(e)
+        # Try to extract ACME error detail if present
+        detail = None
+        # Look for 'Response:' in the error string and try to parse JSON
+        import re
+        import json
+        match = re.search(r'Response: (\{.*\})', msg, re.DOTALL)
+        if match:
+            try:
+                err_json = json.loads(match.group(1))
+                if 'detail' in err_json:
+                    detail = err_json['detail']
+                elif 'error' in err_json:
+                    detail = err_json['error']
+                elif 'type' in err_json:
+                    detail = err_json['type']
+                else:
+                    detail = str(err_json)
+            except Exception:
+                pass
+        if "HTTP Error 429" in msg or "429" in msg:
+            print("Error: Let's Encrypt rate limit reached (HTTP 429: Too Many Requests). Please wait before retrying.", file=sys.stderr)
+        elif "Network error" in msg:
+            print("Error: Network error communicating with Let's Encrypt or DNS provider. Details: {}".format(msg), file=sys.stderr)
+        elif "Challenge did not pass" in msg:
+            print("Error: DNS or HTTP challenge failed. Please check your DNS provider/API credentials and domain configuration.", file=sys.stderr)
+        elif "Order failed" in msg:
+            print("Error: Let's Encrypt order failed. Details: {}".format(msg), file=sys.stderr)
+        else:
+            print("Error: {}".format(msg), file=sys.stderr)
+        if detail:
+            print("ACME server response detail: {}".format(detail), file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print("Unexpected error: {}".format(e), file=sys.stderr)
+        sys.exit(1)
 
 if __name__ == "__main__": # pragma: no cover
     main(sys.argv[1:])

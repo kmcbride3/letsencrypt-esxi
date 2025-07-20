@@ -246,9 +246,9 @@ export SSL_CERT_FILE
 export DNS_PROPAGATION_WAIT
 
 if [ "$CHALLENGE_TYPE" = "http-01" ]; then
-  CERT=$(python3 ./acme_tiny.py --account-key "$ACCOUNTKEY" --csr "$CSR" --acme-dir "$ACMEDIR" --directory-url "$DIRECTORY_URL" --challenge-type "$CHALLENGE_TYPE")
+  CERT=$(python3 ./acme_tiny.py --account-key "$ACCOUNTKEY" --csr "$CSR" --acme-dir "$ACMEDIR" --directory-url "$DIRECTORY_URL" --challenge-type "$CHALLENGE_TYPE" 2>acme_error.log)
 elif [ "$CHALLENGE_TYPE" = "dns-01" ]; then
-  CERT=$(python3 ./acme_tiny.py --account-key "$ACCOUNTKEY" --csr "$CSR" --directory-url "$DIRECTORY_URL" --challenge-type "$CHALLENGE_TYPE")
+  CERT=$(python3 ./acme_tiny.py --account-key "$ACCOUNTKEY" --csr "$CSR" --directory-url "$DIRECTORY_URL" --challenge-type "$CHALLENGE_TYPE" 2>acme_error.log)
 fi
 
 # If an error occurred during certificate issuance, $CERT will be empty
@@ -260,8 +260,14 @@ if [ -n "$CERT" ] ; then
   log "Success: Obtained and installed a certificate from Let's Encrypt."
 elif openssl x509 -checkend 86400 -noout -in "$VMWARE_CRT"; then
   log "Warning: No cert obtained from Let's Encrypt. Keeping the existing one as it is still valid."
+  if [ -s acme_error.log ]; then
+    log "acme_tiny.py error output:"; cat acme_error.log | while read line; do log "$line"; done
+  fi
 else
   log "Error: No cert obtained from Let's Encrypt. Generating a self-signed certificate."
+  if [ -s acme_error.log ]; then
+    log "acme_tiny.py error output:"; cat acme_error.log | while read line; do log "$line"; done
+  fi
   /sbin/generate-certificates
 fi
 
