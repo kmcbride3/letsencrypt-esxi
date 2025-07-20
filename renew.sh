@@ -271,9 +271,6 @@ else
   /sbin/generate-certificates
 fi
 
-# Cleanup firewall rules (also handled by trap, but explicit cleanup for clarity)
-cleanup_firewall
-
 # Restart hostd and vpxa to ensure new cert is fully applied
 log "Restarting hostd and vpxa to reload certificates..."
 for svc in hostd vpxa; do
