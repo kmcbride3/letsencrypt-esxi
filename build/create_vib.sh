@@ -143,11 +143,40 @@ ${PAYLOAD_FILES}
 __W2C__
 
 # Create letsencrypt-esxi VIB
+
 touch ${TEMP_DIR}/sig.pkcs7
 ar r w2c-letsencrypt-esxi.vib ${TEMP_DIR}/descriptor.xml ${TEMP_DIR}/sig.pkcs7 ${TEMP_DIR}/payload1
+if [ $? -ne 0 ]; then
+    echo "[ERROR] Failed to create VIB file (ar command failed)" >&2
+    exit 1
+fi
+
+# Check VIB file exists
+if [ ! -f w2c-letsencrypt-esxi.vib ]; then
+    echo "[ERROR] VIB file was not created!" >&2
+    pwd; ls -l
+    exit 1
+fi
+
+echo "[INFO] VIB file created: w2c-letsencrypt-esxi.vib"
+pwd; ls -lh w2c-letsencrypt-esxi.vib
 
 # Create the offline bundle
 PYTHONPATH=/opt/vmware/vibtools-6.0.0-847598/bin python -c "import vibauthorImpl; vibauthorImpl.CreateOfflineBundle('w2c-letsencrypt-esxi.vib', 'w2c-letsencrypt-esxi-offline-bundle.zip', True)"
+if [ $? -ne 0 ]; then
+    echo "[ERROR] Failed to create offline bundle (Python vibauthorImpl)" >&2
+    exit 1
+fi
+
+# Check offline bundle exists
+if [ ! -f w2c-letsencrypt-esxi-offline-bundle.zip ]; then
+    echo "[ERROR] Offline bundle was not created!" >&2
+    pwd; ls -l
+    exit 1
+fi
+
+echo "[INFO] Offline bundle created: w2c-letsencrypt-esxi-offline-bundle.zip"
+ls -lh w2c-letsencrypt-esxi-offline-bundle.zip
 
 # Show some details about what we have just created
 vibauthor -i -v w2c-letsencrypt-esxi.vib
