@@ -25,10 +25,11 @@ cd "${LOCALDIR}" || exit
 
 VIB_DATE=$(date --date="$(git log -n1 --format="%cd" --date="iso")" '+%Y-%m-%dT%H:%I:%S')
 VIB_TAG=$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' --match '[0-9]*.[0-9]*.[0-9]*' 2> /dev/null || echo 0.0.1)
+# Remove leading 'v' if present
 VIB_VERSION=$(echo "$VIB_TAG" | sed 's/^v//')
-# Ensure version ends with -0.0.0 (ESXi expects this format)
+# If version does not contain a dash, append -0.0.0 (ESXi expects this format)
 case "$VIB_VERSION" in
-  *-0.0.0) ;; # already has suffix
+  *-*) ;; # already has a dash, do nothing
   *) VIB_VERSION="${VIB_VERSION}-0.0.0" ;;
 esac
 
