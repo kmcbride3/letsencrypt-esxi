@@ -12,21 +12,29 @@ BACKUP_CFG="/etc/renew.cfg.bak"
 TARGET_CFG="/opt/w2c-letsencrypt/renew.cfg"
 EXAMPLE_CFG="/opt/w2c-letsencrypt/renew.cfg.example"
 
-# Restore user-modified renew.cfg from persistent backup if it exists
-if [ -f "$BACKUP_CFG" ]; then
-    cp -f "$BACKUP_CFG" "$TARGET_CFG"
-    echo "Restored user renew.cfg from backup."
-elif [ ! -f "$TARGET_CFG" ] && [ -f "$EXAMPLE_CFG" ]; then
-    cp -f "$EXAMPLE_CFG" "$TARGET_CFG"
-    echo "Created new renew.cfg from example."
-fi
-
-# If renew.cfg exists and is different from backup, update the backup
-if [ -f "$TARGET_CFG" ]; then
-    if [ ! -f "$BACKUP_CFG" ] || ! cmp -s "$TARGET_CFG" "$BACKUP_CFG"; then
+# Config logic: only one action per run, BusyBox/ash compatible
+if [ -f "$TARGET_CFG" ] && [ -f "$BACKUP_CFG" ]; then
+    if [ "$TARGET_CFG" -nt "$BACKUP_CFG" ]; then
         cp -f "$TARGET_CFG" "$BACKUP_CFG"
-        echo "Backed up user renew.cfg to $BACKUP_CFG."
+        [ "$DEBUG" = "1" ] && echo "Backed up user renew.cfg to $BACKUP_CFG."
+    elif [ "$BACKUP_CFG" -nt "$TARGET_CFG" ]; then
+        cp -f "$BACKUP_CFG" "$TARGET_CFG"
+        [ "$DEBUG" = "1" ] && echo "Restored user renew.cfg from backup."
+    else
+        [ "$DEBUG" = "1" ] && echo "renew.cfg and backup are the same age. No action taken."
     fi
+elif [ -f "$TARGET_CFG" ]; then
+    cp -f "$TARGET_CFG" "$BACKUP_CFG"
+    [ "$DEBUG" = "1" ] && echo "Backed up user renew.cfg to $BACKUP_CFG."
+elif [ -f "$BACKUP_CFG" ]; then
+    cp -f "$BACKUP_CFG" "$TARGET_CFG"
+    [ "$DEBUG" = "1" ] && echo "Restored user renew.cfg from backup."
+elif [ -f "$EXAMPLE_CFG" ]; then
+    cp -f "$EXAMPLE_CFG" "$TARGET_CFG"
+    cp -f "$EXAMPLE_CFG" "$BACKUP_CFG"
+    [ "$DEBUG" = "1" ] && echo "Created new renew.cfg from example."
+else
+    [ "$DEBUG" = "1" ] && echo "No renew.cfg, backup, or example found. No action taken."
 fi
 
 export PATH=/sbin:/usr/sbin:/bin:/usr/bin
@@ -35,6 +43,14 @@ log() {
    echo "$@"
    logger -p daemon.info -t "$0" "$@"
 }
+
+# Determine challenge type (env overrides config)
+CHALLENGE_TYPE_ENV="$CHALLENGE_TYPE"
+if [ -z "$CHALLENGE_TYPE_ENV" ] && [ -f "$TARGET_CFG" ]; then
+    # shellcheck disable=SC1090
+    . "$TARGET_CFG"
+    CHALLENGE_TYPE_ENV="$CHALLENGE_TYPE"
+fi
 
 for action in "$@"; do
    log "Running '${action}' action";
@@ -46,7 +62,9 @@ for action in "$@"; do
 
       remove)
          sed -i '/\/opt\/w2c-letsencrypt/d' /var/spool/cron/crontabs/root
-         sed -i '/acme-challenge/d' /etc/vmware/rhttpproxy/endpoints.conf
+         if [ "$CHALLENGE_TYPE_ENV" != "dns-01" ]; then
+           sed -i '/acme-challenge/d' /etc/vmware/rhttpproxy/endpoints.conf
+         fi
          /sbin/generate-certificates
          for s in /etc/init.d/*; do if $s | grep ssl_reset > /dev/null; then $s ssl_reset; fi; done
          ;;
