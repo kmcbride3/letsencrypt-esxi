@@ -24,10 +24,12 @@ Before installing `w2c-letsencrypt-esxi`, ensure the following preconditions are
 Additional requirements depend on the challenge type you plan to use:
 
 ### HTTP-01 Challenges
+
 - Your server is publicly reachable over the Internet
 - The hostname you specified can be resolved via A and/or AAAA records in the corresponding DNS zone
 
 ### DNS-01 Challenges
+
 - Your server _does not_ need to be publicly reachable over the Internet; this method also allows wildcard certificates
 - You must be able to manage DNS records for your domain (API credentials for supported providers, or manual access)
 
@@ -39,7 +41,7 @@ Additional requirements depend on the challenge type you plan to use:
 
 ### SSH on ESXi
 
-```bash
+```shellsession
 $ wget -O /tmp/w2c-letsencrypt-esxi.vib https://github.com/w2c/letsencrypt-esxi/releases/latest/download/w2c-letsencrypt-esxi.vib
 
 $ esxcli software vib install -v /tmp/w2c-letsencrypt-esxi.vib -f
@@ -71,7 +73,7 @@ $ cat /var/log/syslog.log | grep w2c
 
 To customize certificate renewal, copy the example configuration file and edit it:
 
-```bash
+```shellsession
 cp /opt/w2c-letsencrypt/renew.cfg.example /opt/w2c-letsencrypt/renew.cfg
 vi /opt/w2c-letsencrypt/renew.cfg
 ```
@@ -82,14 +84,14 @@ Most options can be set in `renew.cfg`. See [`renew.cfg.example`](renew.cfg.exam
 
 - **Use Let's Encrypt staging environment and change the renewal interval:**
 
-    ```bash
+    ```shellsession
     DIRECTORY_URL="https://acme-staging-v02.api.letsencrypt.org/directory"
     RENEW_DAYS=15
     ```
 
 - **Enable DNS-01 challenge (Cloudflare):**
 
-    ```bash
+    ```shellsession
     CHALLENGE_TYPE="dns-01"
     DNS_PROVIDER="cloudflare"
     CF_API_TOKEN="your-cloudflare-api-token"
@@ -97,7 +99,7 @@ Most options can be set in `renew.cfg`. See [`renew.cfg.example`](renew.cfg.exam
 
 - **Enable DNS-01 challenge (manual):**
 
-    ```bash
+    ```shellsession
     CHALLENGE_TYPE="dns-01"
     DNS_PROVIDER="manual"
     ```
@@ -110,7 +112,7 @@ Most options can be set in `renew.cfg`. See [`renew.cfg.example`](renew.cfg.exam
 
 Remove the installed `w2c-letsencrypt-esxi` package via SSH:
 
-```bash
+```shellsession
 $ esxcli software vib remove -n w2c-letsencrypt-esxi
 Removal Result
    Message: Operation finished successfully.
@@ -130,7 +132,7 @@ For HTTP-01 and DNS-01 with a supported API provider, operation is fully automat
 
 If you change the hostname on our ESXi instance, the domain the certificate is issued for will mismatch. In that case, either re-install `w2c-letsencrypt-esxi` or simply run `/etc/init.d/w2c-letsencrypt start`, e.g.:
 
-```bash
+```shellsession
 $ esxcfg-advcfg -s new-example.com /Misc/hostname
 Value of HostName is new-example.com
 
@@ -145,27 +147,28 @@ Generating RSA private key, 4096 bit long modulus
 ### Force Renewal
 
 You already have a valid certificate from Let's Encrypt but nonetheless want to renew it now:
-```bash
+
+```shellsession
 rm /etc/vmware/ssl/rui.crt
 /etc/init.d/w2c-letsencrypt start
 ```
 
 ## How does it work?
 
-* Checks if the current certificate is issued by Let's Encrypt and due for renewal (_default:_ 30d in advance)
-* Generates a 4096-bit RSA keypair and CSR
-* Instructs `rhttpproxy` to route all requests to `/.well-known/acme-challenge` to a custom port
-* Configures ESXi firewall to allow outgoing HTTP connections
-* Uses [acme-tiny](https://github.com/diafygi/acme-tiny) for all interactions with Let's Encrypt
-* Starts an HTTP server on a non-privileged port to fulfill Let's Encrypt challenges
-* Installs the retrieved certificate and restarts all services relying on it
-* Adds a cronjob to check periodically if the certificate is due for renewal (_default:_ weekly on Sunday, 00:00)
+- Checks if the current certificate is issued by Let's Encrypt and due for renewal (_default:_ 30d in advance)
+- Generates a 4096-bit RSA keypair and CSR
+- Instructs `rhttpproxy` to route all requests to `/.well-known/acme-challenge` to a custom port
+- Configures ESXi firewall to allow outgoing HTTP connections
+- Uses [acme-tiny](https://github.com/diafygi/acme-tiny) for all interactions with Let's Encrypt
+- Starts an HTTP server on a non-privileged port to fulfill Let's Encrypt challenges
+- Installs the retrieved certificate and restarts all services relying on it
+- Adds a cronjob to check periodically if the certificate is due for renewal (_default:_ weekly on Sunday, 00:00)
 
 ## Demo
 
 Here is a sample output when invoking the script manually via SSH:
 
-```bash
+```shellsession
 $ /etc/init.d/w2c-letsencrypt start
 
 Running 'start' action
@@ -211,15 +214,17 @@ See the [Wiki](https://github.com/w2c/letsencrypt-esxi/wiki) for possible pitfal
 
 ## License
 
-    w2c-letsencrypt-esxi is free software;
-    you can redistribute it and/or modify it under the terms of the
-    GNU General Public License as published by the Free Software Foundation,
-    either version 3 of the License, or (at your option) any later version.
+```text
+w2c-letsencrypt-esxi is free software;
+you can redistribute it and/or modify it under the terms of the
+GNU General Public License as published by the Free Software Foundation,
+either version 3 of the License, or (at your option) any later version.
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-    GNU General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+```
