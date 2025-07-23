@@ -40,10 +40,14 @@ if [ ! -f "$CONFIG" ] && [ -f "$CONFIG_BAK" ]; then
 fi
 
 ACMEDIR="$LOCALDIR/.well-known/acme-challenge"
+DIRECTORY_URL="https://acme-v02.api.letsencrypt.org/directory"
 SSL_CERT_FILE="$LOCALDIR/ca-certificates.crt"
 RENEW_DAYS=30
 
 ACCOUNTKEY="esxi_account.key"
+KEY="esxi.key"
+CSR="esxi.csr"
+CRT="esxi.crt"
 VMWARE_CRT="/etc/vmware/ssl/rui.crt"
 VMWARE_KEY="/etc/vmware/ssl/rui.key"
 
