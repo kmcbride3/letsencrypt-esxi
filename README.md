@@ -7,7 +7,7 @@ Features:
 - **Fully-automated**: Requesting and renewing certificates without user interaction
 - **Auto-renewal**: A cronjob runs once a week to check if a certificate is due for renewal
 - **Persistent**: The certificate, private key and all settings are preserved over ESXi upgrades
-- **Configurable**: Customizable parameters for renewal interval, Let's Encrypt (ACME) backend, etc
+- **Configurable**: Customizable parameters for challenge type, renewal interval, Let's Encrypt (ACME) backend, etc
 
 _Successfully tested with ESXi 6.5, 6.7, 7.0, 8.0._
 
@@ -24,10 +24,12 @@ Before installing `w2c-letsencrypt-esxi`, ensure the following preconditions are
 Additional requirements depend on the challenge type you plan to use:
 
 ### HTTP-01 Challenges
+
 - Your server is publicly reachable over the Internet
 - The hostname you specified can be resolved via A and/or AAAA records in the corresponding DNS zone
 
 ### DNS-01 Challenges
+
 - Your server _does not_ need to be publicly reachable over the Internet; this method also allows wildcard certificates
 - You must be able to manage DNS records for your domain (API credentials for supported providers, or manual access)
 
@@ -46,12 +48,12 @@ $ esxcli software vib install -v /tmp/w2c-letsencrypt-esxi.vib -f
 Installation Result
    Message: Operation finished successfully.
    Reboot Required: false
-   VIBs Installed: web-wack-creations_bootbank_w2c-letsencrypt-esxi_1.0.0-0.0.0
+   VIBs Installed: web-wack-creations_bootbank_w2c-letsencrypt-esxi_1.0.0-836582
    VIBs Removed:
    VIBs Skipped:
 
 $ esxcli software vib list | grep w2c
-w2c-letsencrypt-esxi  1.0.0-0.0.0  web-wack-creations  CommunitySupported  2022-05-29
+w2c-letsencrypt-esxi  1.0.0-836582  web-wack-creations  CommunitySupported  2022-05-29
 
 $ cat /var/log/syslog.log | grep w2c
 2022-05-29T20:01:46Z /etc/init.d/w2c-letsencrypt: Running 'start' action
@@ -69,14 +71,14 @@ $ cat /var/log/syslog.log | grep w2c
 
 ### Configuration
 
-To customize certificate renewal, copy the example configuration file and edit it:
+An optional `renew.cfg` allows for using DNS-01 challenges and/or modifying default renewal period during the renewal process. It is **not necessary when using HTTP-01 challenges** and renewing certificates every 30 days. It is required when using DNS-01 challenges to specify your DNS provider and the necessary credentials (API token, keys, etc.), test renewal in the staging environment, modify renewal frequency, and for other advanced configuration. See [`renew.cfg.example`](renew.cfg.example) for all available settings and DNS provider variables.
+
+It is recommended that you copy the provided example config to a persistent datastore and edit it there:
 
 ```bash
-cp /opt/w2c-letsencrypt/renew.cfg.example /opt/w2c-letsencrypt/renew.cfg
-vi /opt/w2c-letsencrypt/renew.cfg
+cp /opt/w2c-letsencrypt/renew.cfg.example /vmfs/volumes/<YOUR DATASTORE>/<PATH TO CONFIG>/renew.cfg
+vi /vmfs/volumes/<YOUR DATASTORE>/<PATH TO CONFIG>/renew.cfg
 ```
-
-Most options can be set in `renew.cfg`. See [`renew.cfg.example`](renew.cfg.example) for all available settings and DNS provider variables.
 
 #### Common configuration examples
 
@@ -106,6 +108,42 @@ Most options can be set in `renew.cfg`. See [`renew.cfg.example`](renew.cfg.exam
 
 **Note:** Automated renewal is only supported for providers with API support (e.g., Cloudflare).
 
+#### Persisting configuration
+
+Once the configuration file has been updated, you will need to take additional steps to make it persist between reboots. There are two options provided to assist with doing so.
+
+##### Option 1: Built-in `config` action (recommended)
+
+Use the built-in `config` action with the full path to the config file to install and persist it (by copying it to `/opt/w2c-letsencrypt`, updating `/etc/rc.local.d/local.sh` (after creating a backup), and running `/sbin/auto-backup.sh`):
+
+```bash
+/etc/init.d/w2c-letsencrypt config /vmfs/volumes/<YOUR DATASTORE>/<PATH TO CONFIG>/renew.cfg
+```
+
+##### Option 2: Manage persistence manually
+
+1. Copy it into place for the current boot and secure it:
+
+    ```bash
+    cp /vmfs/volumes/<YOUR DATASTORE>/<PATH TO CONFIG>/renew.cfg /opt/w2c-letsencrypt/renew.cfg
+    chmod 600 /opt/w2c-letsencrypt/renew.cfg
+    chown root:root /opt/w2c-letsencrypt/renew.cfg
+    ```
+
+2. Back up and modify `/etc/rc.local.d/local.sh` to copy the datastore config on boot (insert the cp line before the final `exit 0`):
+
+    ```bash
+    cp /etc/rc.local.d/local.sh /etc/rc.local.d/local.sh.bak.YYYYMMDD
+    # add before exit 0
+    mkdir -p /opt/w2c-letsencrypt && cp /vmfs/volumes/<YOUR DATASTORE>/<PATH TO CONFIG>/renew.cfg /opt/w2c-letsencrypt/ && chmod 600 /opt/w2c-letsencrypt/renew.cfg && chown root:root /opt/w2c-letsencrypt/renew.cfg
+    ```
+
+3. Persist the edited `local.sh` so ESXi will keep it across reboots:
+
+    ```bash
+    /sbin/auto-backup.sh
+    ```
+
 ## Uninstall
 
 Remove the installed `w2c-letsencrypt-esxi` package via SSH:
@@ -120,7 +158,7 @@ Removal Result
    VIBs Skipped:
 ```
 
-This action will purge `w2c-letsencrypt-esxi`, undo any changes to system files (cronjob and port redirection) and finally call `/sbin/generate-certificates` to generate and install a new, self-signed certificate.
+This action will purge `w2c-letsencrypt-esxi`, undo any changes to system files (cronjob, local.sh, and port redirection) edited during installation or made through the `config`, and finally call `/sbin/generate-certificates` to generate and install a new, self-signed certificate.
 
 ## Usage
 
@@ -144,7 +182,14 @@ Generating RSA private key, 4096 bit long modulus
 
 ### Force Renewal
 
-You already have a valid certificate from Let's Encrypt but nonetheless want to renew it now:
+You already have a valid certificate from Let's Encrypt but nonetheless want to renew it now. A safe method is provided through the `force` action:
+
+```bash
+/etc/init.d/w2c-letsencrypt force
+```
+
+Alternatively, if you prefer, you can remove the certificate yourself and then start renewal:
+
 ```bash
 rm /etc/vmware/ssl/rui.crt
 /etc/init.d/w2c-letsencrypt start
@@ -163,7 +208,7 @@ rm /etc/vmware/ssl/rui.crt
 
 ## Demo
 
-Here is a sample output when invoking the script manually via SSH:
+Here is a sample output when invoking the script manually via SSH using the default settings and the HTTP-01 challenge method:
 
 ```bash
 $ /etc/init.d/w2c-letsencrypt start

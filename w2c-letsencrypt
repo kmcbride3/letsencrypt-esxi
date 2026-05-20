@@ -9,70 +9,127 @@
 
 export PATH=/sbin:/usr/sbin:/bin:/usr/bin
 
+# Timestamp for backups (YYYYMMDD)
+TS=$(date +%Y%m%d)
+
 log() {
    echo "$@"
    logger -p daemon.info -t "$0" "$@"
 }
 
-for action in "$@"; do
-   log "Running '${action}' action";
+# If invoked as: `w2c-letsencrypt config [path]` handle config immediately
+if [ "$1" = "config" ]; then
+   # Accept optional path argument as second parameter, otherwise prompt
+   if [ -n "$2" ]; then
+      CFG_PATH="$2"
+   else
+      printf "Enter full path to your datastore renew.cfg (e.g. /vmfs/volumes/datastore1/letsencrypt/renew.cfg): "
+      read CFG_PATH
+   fi
 
-   case "$action" in
-      start)
-         /opt/w2c-letsencrypt/renew.sh
-         ;;
+   if [ -z "${CFG_PATH}" ]; then
+      log "config: no path provided"
+      exit 1
+   fi
 
-      remove)
-         # Remove cron entry (BusyBox sed -i compatibility)
-         if [ -f /var/spool/cron/crontabs/root ]; then
-           cp /var/spool/cron/crontabs/root /var/spool/cron/crontabs/root.bak
-           grep -v '/opt/w2c-letsencrypt' /var/spool/cron/crontabs/root.bak > /var/spool/cron/crontabs/root
-           rm -f /var/spool/cron/crontabs/root.bak
-         fi
-         # Remove rhttpproxy entry (BusyBox sed -i compatibility)
-         if [ -f /etc/vmware/rhttpproxy/endpoints.conf ]; then
-           cp /etc/vmware/rhttpproxy/endpoints.conf /etc/vmware/rhttpproxy/endpoints.conf.bak
-           grep -v 'acme-challenge' /etc/vmware/rhttpproxy/endpoints.conf.bak > /etc/vmware/rhttpproxy/endpoints.conf
-           rm -f /etc/vmware/rhttpproxy/endpoints.conf.bak
-         fi
-         /sbin/generate-certificates
-         # Restart SSL-aware services to use new self-signed certificate
-         for s in /etc/init.d/*; do
-           # Skip our own script to avoid recursion
-           case "$(basename "$s")" in
-             w2c-letsencrypt) continue ;;
-           esac
-           if [ -x "$s" ] && grep -q "ssl_reset" "$s" 2>/dev/null; then
-             "$s" ssl_reset 2>/dev/null || true
-           fi
-         done
-         ;;
+   mkdir -p /opt/w2c-letsencrypt
+   cp "${CFG_PATH}" /opt/w2c-letsencrypt/renew.cfg
+   chmod 600 /opt/w2c-letsencrypt/renew.cfg || true
+   chown root:root /opt/w2c-letsencrypt/renew.cfg || true
 
-      stop)
-         true
-         ;;
+   if [ -f /etc/rc.local.d/local.sh ]; then
+      cp -f /etc/rc.local.d/local.sh /etc/rc.local.d/local.sh.bak.${TS}
+   else
+      echo "#!/bin/sh" > /etc/rc.local.d/local.sh
+      echo "exit 0" >> /etc/rc.local.d/local.sh
+      chmod +x /etc/rc.local.d/local.sh
+   fi
 
-      status)
-         true
-         ;;
+   grep -Fq "cp \"${CFG_PATH}\" /opt/w2c-letsencrypt/renew.cfg" /etc/rc.local.d/local.sh 2>/dev/null || \
+      sed -i "/exit 0/i mkdir -p /opt/w2c-letsencrypt && cp \"${CFG_PATH}\" /opt/w2c-letsencrypt/ && chmod 600 /opt/w2c-letsencrypt/renew.cfg && chown root:root /opt/w2c-letsencrypt/renew.cfg" /etc/rc.local.d/local.sh
 
-      install)
-         true
-         ;;
+   if [ -x /sbin/auto-backup.sh ]; then
+      /sbin/auto-backup.sh || log "config: auto-backup failed"
+   else
+      log "config: auto-backup not found"
+   fi
+else
 
-      upgrade)
-         true
-         ;;
+   for action in "$@"; do
+      log "Running '${action}' action";
 
-      restart)
-         "$0" stop
-         "$0" start
-         ;;
+      case "$action" in
+         start)
+            /opt/w2c-letsencrypt/renew.sh
+            ;;
 
-      *)
-         echo "Usage: $(basename "$0") {start|stop|status|restart}"
-         exit 1
-   esac
-done
+         remove)
+            # Remove cron entry (BusyBox sed -i compatibility)
+            if [ -f /var/spool/cron/crontabs/root ]; then
+               cp -f /var/spool/cron/crontabs/root /var/spool/cron/crontabs/root.bak.${TS}
+               grep -v '/opt/w2c-letsencrypt' /var/spool/cron/crontabs/root.bak.${TS} > /var/spool/cron/crontabs/root
+               rm -f /var/spool/cron/crontabs/root.bak.${TS}
+            fi
+            # Remove rhttpproxy entry (BusyBox sed -i compatibility)
+            if [ -f /etc/vmware/rhttpproxy/endpoints.conf ]; then
+               cp -f /etc/vmware/rhttpproxy/endpoints.conf /etc/vmware/rhttpproxy/endpoints.conf.bak.${TS}
+               grep -v 'acme-challenge' /etc/vmware/rhttpproxy/endpoints.conf.bak.${TS} > /etc/vmware/rhttpproxy/endpoints.conf
+               rm -f /etc/vmware/rhttpproxy/endpoints.conf.bak.${TS}
+            fi
+            # Remove any boot-time copy lines added by `config`
+            if [ -f /etc/rc.local.d/local.sh ]; then
+               sed -i "/\/opt\/w2c-letsencrypt\/renew.cfg/d" /etc/rc.local.d/local.sh 2>/dev/null || true
+               if [ -x /sbin/auto-backup.sh ]; then
+                  /sbin/auto-backup.sh || true
+               fi
+            fi
+            /sbin/generate-certificates
+            # Restart SSL-aware services to use new self-signed certificate
+            for s in /etc/init.d/*; do
+            # Skip our own script to avoid recursion
+            case "$(basename "$s")" in
+               w2c-letsencrypt) continue ;;
+            esac
+            if [ -x "$s" ] && grep -q "ssl_reset" "$s" 2>/dev/null; then
+               "$s" ssl_reset 2>/dev/null || true
+            fi
+            done
+            ;;
+
+         stop)
+            true
+            ;;
+
+         status)
+            true
+            ;;
+
+         install)
+            true
+            ;;
+
+         upgrade)
+            true
+            ;;
+
+         restart)
+            "$0" stop
+            "$0" start
+            ;;
+
+         force)
+            # Force renewal by removing existing VMware certificate then run renewal
+            if [ -f /etc/vmware/ssl/rui.crt ]; then
+               rm -f /etc/vmware/ssl/rui.crt
+            fi
+            "$0" start
+            ;;
+
+         *)
+            echo "Usage: $(basename "$0") {start|stop|status|restart|force|config [path]}"
+            exit 1
+      esac
+   done
+fi
 
 exit 0
