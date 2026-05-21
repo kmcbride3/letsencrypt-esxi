@@ -26,6 +26,49 @@ CF_API_BASE="https://api.cloudflare.com/client/v4"
 CF_TTL=${CF_TTL:-120}
 CF_PROXY=${CF_PROXY:-false}
 
+# Protected temp directory for cross-invocation state (record/zone IDs).
+_CF_TMP_DIR="/tmp/acme_w2c"
+
+_cf_ensure_tmp() {
+    # 1. Remove the path unconditionally if it is a symlink.
+    if [ -L "$_CF_TMP_DIR" ]; then
+        dns_log_warn "Symlink found at $_CF_TMP_DIR — removing"
+        rm -f "$_CF_TMP_DIR" \
+            || { dns_log_error "Cannot remove symlink at $_CF_TMP_DIR; aborting"; return 1; }
+    fi
+
+    # 2. If a directory already exists, verify it is owned by root with mode 700.
+    #    Any deviation is treated as a potential compromise indicator: destroy the
+    #    directory and recreate it rather than continuing to use a suspect path.
+    if [ -d "$_CF_TMP_DIR" ]; then
+        _ct_ls=$(ls -ld "$_CF_TMP_DIR" 2>/dev/null)
+        _ct_perm=$(printf '%s' "$_ct_ls" | cut -c1-10)
+        _ct_owner=$(printf '%s' "$_ct_ls" | awk '{print $3}')
+        if [ "$_ct_perm" != "drwx------" ] || [ "$_ct_owner" != "root" ]; then
+            dns_log_warn "Temp dir unsafe (perm=$_ct_perm owner=$_ct_owner) — removing and recreating"
+            rm -rf "$_CF_TMP_DIR" \
+                || { dns_log_error "Cannot remove unsafe temp dir; aborting to prevent symlink-follow"; return 1; }
+        fi
+    fi
+
+    # 3. (Re-)create when absent.  Use plain mkdir — not -p — so that a symlink
+    #    or file raced into place between the check above and now causes a hard
+    #    failure rather than being silently traversed.
+    if [ ! -d "$_CF_TMP_DIR" ]; then
+        mkdir "$_CF_TMP_DIR" \
+            || { dns_log_error "Cannot create temp dir $_CF_TMP_DIR"; return 1; }
+        chmod 700 "$_CF_TMP_DIR" \
+            || { dns_log_error "Cannot set permissions on $_CF_TMP_DIR"; return 1; }
+    fi
+}
+
+# State helpers: read/write/remove a value for ROLE ($1) / DOMAIN ($2) [/ VALUE ($3)].
+# The directory is validated as root-owned 700 by _cf_ensure_tmp before any of these
+# are called, so predictable filenames inside it are safe from unprivileged attackers.
+_cf_state_write() { printf '%s\n' "$3" > "$_CF_TMP_DIR/cf_${1}_${2}.id"; }
+_cf_state_read()  { cat "$_CF_TMP_DIR/cf_${1}_${2}.id" 2>/dev/null; }
+_cf_state_rm()    { rm -f "$_CF_TMP_DIR/cf_${1}_${2}.id"; }
+
 # Authentication setup
 _cf_setup_auth() {
     if [ -n "${CF_API_TOKEN:-}" ]; then
@@ -171,7 +214,8 @@ dns_cloudflare_add() {
 
     if [ -n "$existing_record_id" ]; then
         dns_log_info "TXT record already exists with ID: $existing_record_id"
-        echo "$existing_record_id" > "/tmp/acme_cf_record_${domain}.id"
+        _cf_ensure_tmp || return 1
+        _cf_state_write "record" "$domain" "$existing_record_id"
         return 0
     fi
 
@@ -195,16 +239,18 @@ Content-Type: application/json"
 
     if { [ "$success_lc" = "true" ] || [ "$success" = "1" ]; } && [ -n "$record_id" ] && [ "$record_id" != "null" ]; then
         dns_log_info "Created Cloudflare TXT record: $record_id"
-        echo "$record_id" > "/tmp/acme_cf_record_${domain}.id"
-        echo "$zone_id" > "/tmp/acme_cf_zone_${domain}.id"
+        _cf_ensure_tmp || return 1
+        _cf_state_write "record" "$domain" "$record_id"
+        _cf_state_write "zone" "$domain" "$zone_id"
         return 0
     else
         error_msg=$(dns_json_get "$create_response" "errors.0.message")
         # Fallback: if no error message but record_id exists, treat as success
         if [ -z "$error_msg" ] && [ -n "$record_id" ] && [ "$record_id" != "null" ]; then
             dns_log_info "Created Cloudflare TXT record (fallback): $record_id"
-            echo "$record_id" > "/tmp/acme_cf_record_${domain}.id"
-            echo "$zone_id" > "/tmp/acme_cf_zone_${domain}.id"
+            _cf_ensure_tmp || return 1
+            _cf_state_write "record" "$domain" "$record_id"
+            _cf_state_write "zone" "$domain" "$zone_id"
             return 0
         fi
         dns_log_error "Failed to create Cloudflare TXT record: $error_msg"
@@ -219,20 +265,14 @@ dns_cloudflare_rm() {
 
     _cf_setup_auth || return 1
 
-    record_file="/tmp/acme_cf_record_${domain}.id"
-    zone_file="/tmp/acme_cf_zone_${domain}.id"
+    _cf_ensure_tmp || return 1
 
-    # Try to get record ID from file first
+    # Retrieve cached IDs written by dns_cloudflare_add.
+    # State files have unpredictable names; pointer files record where to find them.
     record_id=""
     zone_id=""
-
-    if [ -f "$record_file" ]; then
-        record_id=$(cat "$record_file" 2>/dev/null)
-    fi
-
-    if [ -f "$zone_file" ]; then
-        zone_id=$(cat "$zone_file" 2>/dev/null)
-    fi
+    record_id=$(_cf_state_read "record" "$domain")
+    zone_id=$(_cf_state_read "zone" "$domain")
 
     # If we don't have the IDs, try to find them
     if [ -z "$zone_id" ]; then
@@ -240,7 +280,8 @@ dns_cloudflare_rm() {
         zone_id=$(_cf_get_zone_id "$base_domain")
         if [ -z "$zone_id" ]; then
             dns_log_warn "Could not find zone ID for cleanup"
-            rm -f "$record_file" "$zone_file"
+            _cf_state_rm "record" "$domain"
+            _cf_state_rm "zone" "$domain"
             return 0
         fi
     fi
@@ -271,8 +312,9 @@ dns_cloudflare_rm() {
         dns_log_warn "No record ID found for cleanup (record may have already been deleted)"
     fi
 
-    # Clean up temporary files
-    rm -f "$record_file" "$zone_file"
+    # Clean up per-invocation state files and their pointer files.
+    _cf_state_rm "record" "$domain"
+    _cf_state_rm "zone" "$domain"
     return 0
 }
 

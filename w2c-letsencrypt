@@ -9,8 +9,9 @@
 
 export PATH=/sbin:/usr/sbin:/bin:/usr/bin
 
-# Timestamp for backups (YYYYMMDD)
-TS=$(date +%Y%m%d)
+# Timestamp for backups (YYYYMMDDHHmmSS - second granularity avoids overwriting
+# earlier backups when the config action is run twice in the same day)
+TS=$(date +%Y%m%d%H%M%S)
 
 log() {
    echo "$@"
@@ -29,6 +30,21 @@ if [ "$1" = "config" ]; then
 
    if [ -z "${CFG_PATH}" ]; then
       log "config: no path provided"
+      exit 1
+   fi
+
+   # Validate: must be an absolute path with no shell-dangerous characters
+   case "$CFG_PATH" in
+      /*) ;;
+      *) log "config: path must be absolute (e.g. /vmfs/volumes/datastore1/...)"; exit 1 ;;
+   esac
+   case "$CFG_PATH" in
+      *'"'*|*'\'*|*'`'*|*'$'*)
+         log "config: path contains disallowed characters (\", \\, \`, \$)"; exit 1 ;;
+   esac
+   # Must be a regular file, not a symlink, device, or FIFO
+   if [ ! -f "$CFG_PATH" ]; then
+      log "config: source file does not exist or is not a regular file: $CFG_PATH"
       exit 1
    fi
 

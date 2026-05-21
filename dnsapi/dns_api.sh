@@ -112,7 +112,69 @@ dns_log_error() {
 }
 
 dns_log_debug "DNS_PROVIDER is '$DNS_PROVIDER'"
-dns_log_debug "CF_API_TOKEN is '$CF_API_TOKEN'"
+# Redact credential value so it doesn't appear in syslog when DEBUG=1
+dns_log_debug "CF_API_TOKEN is '${CF_API_TOKEN:+[set]}'"
+
+# Determine the wget TLS option once at script startup.  Priority order:
+#   1. User-supplied SSL_CERT_FILE (validated readable)
+#   2. Auto-detected CA bundle from well-known ESXi / Linux paths
+#   3. Explicit opt-in via INSECURE_TLS=1  (hard failure otherwise)
+#
+# _WGET_TLS_WARN is stored here but emitted only on the first actual HTTPS
+# call (in dns_http_get / dns_http_post), not at startup, so that cron runs
+# that never reach the HTTP helpers are not spammed with warnings.
+_WGET_TLS_OPT=""
+_WGET_TLS_WARN=""
+
+# Probe well-known ESXi and common Linux CA bundle paths.
+_dns_find_ca_bundle() {
+    for _dfcb_b in \
+        /etc/ssl/certs/ca-bundle.crt \
+        /etc/vmware/ssl/castore.pem \
+        /etc/ssl/certs/ca-certificates.crt \
+        /usr/lib/ssl/certs/ca-certificates.crt \
+        /etc/pki/tls/certs/ca-bundle.crt \
+        /etc/ssl/ca-bundle.pem; do
+        if [ -r "$_dfcb_b" ]; then
+            printf '%s' "$_dfcb_b"
+            return 0
+        fi
+    done
+    return 1
+}
+
+if wget --help 2>&1 | grep -q '\-\-ca-certificate'; then
+    _ca_bundle=""
+    if [ -n "${SSL_CERT_FILE:-}" ] && [ -r "${SSL_CERT_FILE}" ]; then
+        _ca_bundle="$SSL_CERT_FILE"
+        dns_log_debug "TLS: using SSL_CERT_FILE CA bundle: $_ca_bundle"
+    else
+        _ca_bundle=$(_dns_find_ca_bundle)
+        [ -n "$_ca_bundle" ] && dns_log_debug "TLS: auto-detected CA bundle: $_ca_bundle"
+    fi
+
+    if [ -n "$_ca_bundle" ]; then
+        _WGET_TLS_OPT="--ca-certificate=${_ca_bundle}"
+    elif [ "${INSECURE_TLS:-0}" = "1" ]; then
+        _WGET_TLS_OPT="--no-check-certificate"
+        _WGET_TLS_WARN="INSECURE_TLS=1: TLS certificate verification is DISABLED. DNS provider and ACME API calls are vulnerable to MITM attacks."
+    else
+        dns_log_error "No CA bundle found for TLS verification and INSECURE_TLS is not set."
+        dns_log_error "Fix options: (1) set SSL_CERT_FILE=/path/to/ca-bundle.crt in renew.cfg,"
+        dns_log_error "             (2) set INSECURE_TLS=1 in renew.cfg to disable TLS verification (insecure)."
+        exit 1
+    fi
+else
+    # wget on this system lacks --ca-certificate; per-bundle TLS validation is impossible.
+    if [ "${INSECURE_TLS:-0}" = "1" ]; then
+        _WGET_TLS_OPT="--no-check-certificate"
+        _WGET_TLS_WARN="INSECURE_TLS=1: wget lacks --ca-certificate support; TLS certificate verification is DISABLED. DNS provider and ACME API calls are vulnerable to MITM attacks."
+    else
+        dns_log_error "wget on this system lacks --ca-certificate support; TLS certificate verification is impossible."
+        dns_log_error "Fix options: (1) upgrade wget, (2) set INSECURE_TLS=1 in renew.cfg to disable TLS verification (insecure)."
+        exit 1
+    fi
+fi
 
 # Validation functions
 dns_validate_domain() {
@@ -198,7 +260,15 @@ dns_http_get() {
         return 127
     fi
 
-    set -- -qO- --no-check-certificate
+    # Emit the deferred INSECURE_TLS warning on the first actual HTTPS call
+    # rather than at startup, so cron runs that error before any HTTP call
+    # are not spammed unnecessarily.  Clear after first emission.
+    if [ -n "${_WGET_TLS_WARN:-}" ]; then
+        dns_log_warn "$_WGET_TLS_WARN"
+        _WGET_TLS_WARN=""
+    fi
+
+    set -- -qO- "$_WGET_TLS_OPT"
     if [ -n "$headers" ]; then
         OLD_IFS="$IFS"
         IFS='
@@ -258,13 +328,19 @@ dns_http_post() {
         return 127
     fi
 
+    # Emit the deferred INSECURE_TLS warning on the first actual HTTPS call.
+    if [ -n "${_WGET_TLS_WARN:-}" ]; then
+        dns_log_warn "$_WGET_TLS_WARN"
+        _WGET_TLS_WARN=""
+    fi
+
     # Compact JSON data: remove all newlines, carriage returns, tabs, and literal \n, \t; collapse spaces
     compact_data=$(echo "$data" \
         | sed 's/\\n//g; s/\\t//g' \
         | sed 's/[\r\n\t]//g' \
         | sed 's/  */ /g')
 
-    set -- -qO- --no-check-certificate --post-data="$compact_data"
+    set -- -qO- "$_WGET_TLS_OPT" --post-data="$compact_data"
     if [ -n "$headers" ]; then
         OLD_IFS="$IFS"
         IFS='

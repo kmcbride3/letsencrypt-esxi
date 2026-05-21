@@ -58,18 +58,19 @@ export CHALLENGE_TYPE DNS_PROVIDER DNS_MAX_WAIT \
 # Lockfile for preventing concurrent runs
 LOCKFILE="/var/lock/w2c-letsencrypt.lock"
 
-# Create lockfile or exit if already running
-if [ -f "$LOCKFILE" ]; then
-  log "Another renewal is already in progress. Exiting."
+# Create lockfile atomically using mkdir (POSIX; avoids TOCTOU race)
+LOCKDIR="${LOCKFILE}.lk"
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+  if [ -d "$LOCKDIR" ]; then
+    log "Another renewal is already in progress (lock: $LOCKDIR). Exiting."
+  else
+    log "Error: Failed to create lock directory: $LOCKDIR"
+    log "Possible causes: permission denied, read-only filesystem, or missing parent directory."
+  fi
   exit 1
 fi
-trap "rm -f '$LOCKFILE'" EXIT INT TERM
-if touch "$LOCKFILE" 2>/dev/null; then
-  log "Starting certificate renewal."
-else
-  log "Error: Failed to create lockfile at $LOCKFILE"
-  exit 1
-fi
+trap "rmdir '$LOCKDIR' 2>/dev/null" EXIT INT TERM
+log "Starting certificate renewal."
 
 # Preparation steps
 if [ -z "$DOMAIN" ] || [ "$DOMAIN" = "${DOMAIN/.}" ]; then
@@ -99,7 +100,7 @@ if [ -e "$VMWARE_CRT" ]; then
     log "Existing Let's Encrypt cert valid until: ${CERT_VALID}"
     if openssl x509 -checkend $((RENEW_DAYS * 86400)) -noout -in "$VMWARE_CRT"; then
       log "=> Longer than ${RENEW_DAYS} days. Aborting."
-      exit
+      exit 0
     else
       log "=> Less than ${RENEW_DAYS} days. Renewing!"
     fi
@@ -185,11 +186,13 @@ if [ "$CHALLENGE_TYPE" = "http-01" ]; then
   fi
   # Enable outbound HTTP client for ACME communication (consolidated)
   enable_httpclient_firewall
-  # Start HTTP server on port 8120 for HTTP validation - try python3 first, fallback to python
+  # Start HTTP server serving ONLY the acme-challenge subdirectory.
+  # Scoping to ACMEDIR prevents exposure of private keys and renew.cfg in LOCALDIR.
+  # exec inside the subshell ensures kill -9 hits the python process directly.
   if which python3 >/dev/null 2>&1; then
-    python3 -m http.server 8120 &
+    ( cd "$ACMEDIR" && exec python3 -m http.server 8120 ) &
   elif which python >/dev/null 2>&1; then
-    python -m SimpleHTTPServer 8120 &
+    ( cd "$ACMEDIR" && exec python -m SimpleHTTPServer 8120 ) &
   else
     log "Error: No Python interpreter available for HTTP server"
     exit 1
@@ -229,9 +232,22 @@ log "Checking for required keys and CSR..."
 
 # Generate account key if it doesn't exist
 if [ ! -r "$ACCOUNTKEY" ]; then
+  # If the file (or a dangling symlink) already exists we cannot read it —
+  # abort instead of silently overwriting it.  The operator should inspect
+  # and remove it manually before re-running.
+  if [ -e "$ACCOUNTKEY" ] || [ -L "$ACCOUNTKEY" ]; then
+    log "Error: Account key exists but is not readable: $ACCOUNTKEY"
+    log "Check permissions or remove it manually to generate a new one."
+    exit 1
+  fi
   log "Generating account key: $ACCOUNTKEY"
-  if ! openssl genrsa 4096 > "$ACCOUNTKEY" 2>/dev/null; then
+  # Generate directly to the target path inside a restricted-umask subshell so
+  # the file is created with mode 0600 in a single openssl operation.  This
+  # eliminates the empty-file window that existed with the pre-create ':>' then
+  # '>>' append pattern when the process was interrupted between the two steps.
+  if ! ( umask 0177 && openssl genrsa -out "$ACCOUNTKEY" 4096 2>/dev/null ); then
     log "Error: Failed to generate account key"
+    rm -f "$ACCOUNTKEY"
     exit 1
   fi
   chmod 0400 "$ACCOUNTKEY"
@@ -240,9 +256,16 @@ fi
 
 # Generate domain private key if it doesn't exist
 if [ ! -r "$KEY" ]; then
+  # Abort if the file exists but is unreadable rather than silently overwriting.
+  if [ -e "$KEY" ] || [ -L "$KEY" ]; then
+    log "Error: Domain key file exists but is not readable: $KEY"
+    log "Check permissions or remove it manually to generate a new one."
+    exit 1
+  fi
   log "Generating domain private key: $KEY"
-  if ! openssl genrsa -out "$KEY" 4096 2>/dev/null; then
+  if ! ( umask 0177 && openssl genrsa -out "$KEY" 4096 2>/dev/null ); then
     log "Error: Failed to generate domain private key"
+    rm -f "$KEY"
     exit 1
   fi
   chmod 0400 "$KEY"
