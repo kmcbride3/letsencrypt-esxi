@@ -4,19 +4,19 @@
 
 # Provider information
 dns_cloudflare_info() {
-    echo "Cloudflare DNS API Provider"
-    echo "Website: https://cloudflare.com"
-    echo "Documentation: https://developers.cloudflare.com/api/operations/dns-records-for-a-zone-create-dns-record"
-    echo ""
-    echo "Required Environment Variables:"
-    echo "  CF_API_TOKEN     - Cloudflare API Token (recommended)"
-    echo "  OR"
-    echo "  CF_API_KEY       - Cloudflare Global API Key"
-    echo "  CF_EMAIL         - Cloudflare account email"
-    echo ""
-    echo "Optional Settings:"
-    echo "  CF_TTL           - TTL for DNS records (default: 120)"
-    echo "  CF_PROXY         - Enable Cloudflare proxy (default: false)"
+    log "Cloudflare DNS API Provider"
+    log "Website: https://cloudflare.com"
+    log "Documentation: https://developers.cloudflare.com/api/operations/dns-records-for-a-zone-create-dns-record"
+    log ""
+    log "Required Environment Variables:"
+    log "  CF_API_TOKEN     - Cloudflare API Token (recommended)"
+    log "  OR"
+    log "  CF_API_KEY       - Cloudflare Global API Key"
+    log "  CF_EMAIL         - Cloudflare account email"
+    log ""
+    log "Optional Settings:"
+    log "  CF_TTL           - TTL for DNS records (default: 120)"
+    log "  CF_PROXY         - Enable Cloudflare proxy (default: false)"
 }
 
 # Cloudflare API endpoints
@@ -32,9 +32,9 @@ _CF_TMP_DIR="/tmp/acme_w2c"
 _cf_ensure_tmp() {
     # 1. Remove the path unconditionally if it is a symlink.
     if [ -L "$_CF_TMP_DIR" ]; then
-        dns_log_warn "Symlink found at $_CF_TMP_DIR — removing"
+        log "Warning: Symlink found at $_CF_TMP_DIR — removing"
         rm -f "$_CF_TMP_DIR" \
-            || { dns_log_error "Cannot remove symlink at $_CF_TMP_DIR; aborting"; return 1; }
+            || { log "Error: Cannot remove symlink at $_CF_TMP_DIR; aborting"; return 1; }
     fi
 
     # 2. If a directory already exists, verify it is owned by root with mode 700.
@@ -45,9 +45,9 @@ _cf_ensure_tmp() {
         _ct_perm=$(printf '%s' "$_ct_ls" | cut -c1-10)
         _ct_owner=$(printf '%s' "$_ct_ls" | awk '{print $3}')
         if [ "$_ct_perm" != "drwx------" ] || [ "$_ct_owner" != "root" ]; then
-            dns_log_warn "Temp dir unsafe (perm=$_ct_perm owner=$_ct_owner) — removing and recreating"
+            log "Warning: Temp dir unsafe (perm=$_ct_perm owner=$_ct_owner) — removing and recreating"
             rm -rf "$_CF_TMP_DIR" \
-                || { dns_log_error "Cannot remove unsafe temp dir; aborting to prevent symlink-follow"; return 1; }
+                || { log "Error: Cannot remove unsafe temp dir; aborting to prevent symlink-follow"; return 1; }
         fi
     fi
 
@@ -56,9 +56,9 @@ _cf_ensure_tmp() {
     #    failure rather than being silently traversed.
     if [ ! -d "$_CF_TMP_DIR" ]; then
         mkdir "$_CF_TMP_DIR" \
-            || { dns_log_error "Cannot create temp dir $_CF_TMP_DIR"; return 1; }
+            || { log "Error: Cannot create temp dir $_CF_TMP_DIR"; return 1; }
         chmod 700 "$_CF_TMP_DIR" \
-            || { dns_log_error "Cannot set permissions on $_CF_TMP_DIR"; return 1; }
+            || { log "Error: Cannot set permissions on $_CF_TMP_DIR"; return 1; }
     fi
 }
 
@@ -72,16 +72,16 @@ _cf_state_rm()    { rm -f "$_CF_TMP_DIR/cf_${1}_${2}.id"; }
 # Authentication setup
 _cf_setup_auth() {
     if [ -n "${CF_API_TOKEN:-}" ]; then
-        dns_log_debug "Using Cloudflare API Token authentication"
+        log "Debug: Using Cloudflare API Token authentication"
         CF_AUTH_HEADER="Authorization: Bearer $CF_API_TOKEN"
         return 0
     elif [ -n "${CF_API_KEY:-}" ] && [ -n "${CF_EMAIL:-}" ]; then
-        dns_log_debug "Using Cloudflare Global API Key authentication"
+        log "Debug: Using Cloudflare Global API Key authentication"
         CF_AUTH_HEADER="X-Auth-Key: $CF_API_KEY"
         CF_EMAIL_HEADER="X-Auth-Email: $CF_EMAIL"
         return 0
     else
-        dns_log_error "Cloudflare credentials not found. Please set CF_API_TOKEN or (CF_API_KEY + CF_EMAIL)"
+        log "Error: Cloudflare credentials not found. Please set CF_API_TOKEN or (CF_API_KEY + CF_EMAIL)"
         return 1
     fi
 }
@@ -98,7 +98,7 @@ _cf_get_zone_id() {
     domain="$1"
     base_domain="$(cf_get_base_domain "$domain")"
 
-    dns_log_debug "[CF] Looking up zone for base domain: $base_domain"
+    log "Debug: [CF] Looking up zone for base domain: $base_domain"
     # Try exact match first
     zone_response=""
     headers="$CF_AUTH_HEADER"
@@ -107,12 +107,12 @@ $CF_EMAIL_HEADER"
     headers="$headers
 Content-Type: application/json"
     zone_response=$(dns_http_get "$CF_API_BASE/zones?name=$base_domain" "$headers")
-    dns_log_debug "[CF] Zone lookup response: $zone_response"
+    log "Debug: [CF] Zone lookup response: $zone_response"
 
     zone_id=$(dns_json_get "$zone_response" "result.0.id")
 
     if [ -n "$zone_id" ] && [ "$zone_id" != "null" ]; then
-        dns_log_debug "[CF] Found zone_id: $zone_id for $base_domain"
+        log "Debug: [CF] Found zone_id: $zone_id for $base_domain"
         echo "$zone_id"
         return 0
     fi
@@ -121,7 +121,7 @@ Content-Type: application/json"
     parent_domain="$base_domain"
     while [ "$(echo "$parent_domain" | awk -F'.' '{print NF}')" -gt 2 ]; do
         parent_domain=$(echo "$parent_domain" | cut -d. -f2-)
-        dns_log_debug "[CF] Trying parent domain: $parent_domain"
+        log "Debug: [CF] Trying parent domain: $parent_domain"
         if [ -n "$CF_EMAIL_HEADER" ]; then
             headers="$CF_AUTH_HEADER
 $CF_EMAIL_HEADER
@@ -131,16 +131,16 @@ Content-Type: application/json"
 Content-Type: application/json"
         fi
         zone_response=$(dns_http_get "$CF_API_BASE/zones?name=$parent_domain" "$headers")
-        dns_log_debug "[CF] Parent zone lookup response: $zone_response"
+        log "Debug: [CF] Parent zone lookup response: $zone_response"
         zone_id=$(dns_json_get "$zone_response" "result.0.id")
         if [ -n "$zone_id" ] && [ "$zone_id" != "null" ]; then
-            dns_log_debug "[CF] Found parent zone_id: $zone_id for $parent_domain"
+            log "Debug: [CF] Found parent zone_id: $zone_id for $parent_domain"
             echo "$zone_id"
             return 0
         fi
     done
 
-    dns_log_error "Could not find Cloudflare zone for domain: $base_domain"
+    log "Error: Could not find Cloudflare zone for domain: $base_domain"
     return 1
 }
 
@@ -150,7 +150,7 @@ _cf_get_txt_record_id() {
     record_name="$2"
     txt_value="$3"
 
-    dns_log_debug "[CF] Looking for TXT record in zone $zone_id with name $record_name and value $txt_value"
+    log "Debug: [CF] Looking for TXT record in zone $zone_id with name $record_name and value $txt_value"
     records_response=""
     headers="$CF_AUTH_HEADER"
     [ -n "$CF_EMAIL_HEADER" ] && headers="$headers
@@ -158,7 +158,7 @@ $CF_EMAIL_HEADER"
     headers="$headers
 Content-Type: application/json"
     records_response=$(dns_http_get "$CF_API_BASE/zones/$zone_id/dns_records?type=TXT&name=$record_name" "$headers")
-    dns_log_debug "[CF] TXT record lookup response: $records_response"
+    log "Debug: [CF] TXT record lookup response: $records_response"
 
     i=0
     max_iter=20
@@ -171,7 +171,7 @@ Content-Type: application/json"
         fi
 
         if [ "$record_content" = "$txt_value" ]; then
-            dns_log_debug "[CF] Found matching TXT record id: $record_id"
+            log "Debug: [CF] Found matching TXT record id: $record_id"
             echo "$record_id"
             return 0
         fi
@@ -180,7 +180,7 @@ Content-Type: application/json"
     done
 
     if [ $i -ge $max_iter ]; then
-        dns_log_warn "[CF] TXT record search exceeded $max_iter iterations, possible malformed API response."
+        log "Warning: [CF] TXT record search exceeded $max_iter iterations, possible malformed API response."
     fi
 
     return 1
@@ -191,7 +191,7 @@ dns_cloudflare_add() {
     domain="$1"
     txt_value="$2"
 
-    dns_log_debug "[CF] Starting dns_cloudflare_add for $domain"
+    log "Debug: [CF] Starting dns_cloudflare_add for $domain"
     _cf_setup_auth || return 1
 
     record_name="_acme-challenge.$domain"
@@ -199,21 +199,21 @@ dns_cloudflare_add() {
 
     # Always use base domain for zone lookup
     base_domain="$(cf_get_base_domain "$domain")"
-    dns_log_debug "[CF] Using base domain for zone lookup: $base_domain"
+    log "Debug: [CF] Using base domain for zone lookup: $base_domain"
     zone_id=$(_cf_get_zone_id "$base_domain")
     if [ -z "$zone_id" ]; then
-        dns_log_error "[CF] No zone_id found for $base_domain"
+        log "Error: [CF] No zone_id found for $base_domain"
         return 1
     fi
 
-    dns_log_debug "[CF] Found Cloudflare zone ID: $zone_id"
+    log "Debug: [CF] Found Cloudflare zone ID: $zone_id"
 
     # Check if record already exists
     existing_record_id=""
     existing_record_id=$(_cf_get_txt_record_id "$zone_id" "$record_name" "$txt_value")
 
     if [ -n "$existing_record_id" ]; then
-        dns_log_info "TXT record already exists with ID: $existing_record_id"
+        log "Cloudflare TXT record already exists: $existing_record_id"
         _cf_ensure_tmp || return 1
         _cf_state_write "record" "$domain" "$existing_record_id"
         return 0
@@ -222,7 +222,7 @@ dns_cloudflare_add() {
     # Create new TXT record
     record_data="{\n        \"type\": \"TXT\",\n        \"name\": \"$record_name\",\n        \"content\": \"$txt_value\",\n        \"ttl\": $CF_TTL,\n        \"proxied\": $CF_PROXY\n    }"
 
-    dns_log_debug "[CF] Creating new TXT record: $record_data"
+    log "Debug: [CF] Creating new TXT record: $record_data"
     create_response=""
     headers="$CF_AUTH_HEADER"
     [ -n "$CF_EMAIL_HEADER" ] && headers="$headers
@@ -230,7 +230,7 @@ $CF_EMAIL_HEADER"
     headers="$headers
 Content-Type: application/json"
     create_response=$(dns_http_post "$CF_API_BASE/zones/$zone_id/dns_records" "$record_data" "$headers")
-    dns_log_debug "[CF] TXT record create response: $create_response"
+    log "Debug: [CF] TXT record create response: $create_response"
 
     record_id=$(dns_json_get "$create_response" "result.id")
     success=$(dns_json_get "$create_response" "success")
@@ -238,7 +238,7 @@ Content-Type: application/json"
     success_lc=$(echo "$success" | sed 'y/ABCDEFGHIJKLMNOPQRSTUVWXYZ/abcdefghijklmnopqrstuvwxyz/')
 
     if { [ "$success_lc" = "true" ] || [ "$success" = "1" ]; } && [ -n "$record_id" ] && [ "$record_id" != "null" ]; then
-        dns_log_info "Created Cloudflare TXT record: $record_id"
+        log "Created Cloudflare TXT record: $record_id"
         _cf_ensure_tmp || return 1
         _cf_state_write "record" "$domain" "$record_id"
         _cf_state_write "zone" "$domain" "$zone_id"
@@ -247,13 +247,13 @@ Content-Type: application/json"
         error_msg=$(dns_json_get "$create_response" "errors.0.message")
         # Fallback: if no error message but record_id exists, treat as success
         if [ -z "$error_msg" ] && [ -n "$record_id" ] && [ "$record_id" != "null" ]; then
-            dns_log_info "Created Cloudflare TXT record (fallback): $record_id"
+            log "Created Cloudflare TXT record (fallback): $record_id"
             _cf_ensure_tmp || return 1
             _cf_state_write "record" "$domain" "$record_id"
             _cf_state_write "zone" "$domain" "$zone_id"
             return 0
         fi
-        dns_log_error "Failed to create Cloudflare TXT record: $error_msg"
+        log "Error: Failed to create Cloudflare TXT record: $error_msg"
         return 1
     fi
 }
@@ -279,7 +279,7 @@ dns_cloudflare_rm() {
         base_domain="$(cf_get_base_domain "$domain")"
         zone_id=$(_cf_get_zone_id "$base_domain")
         if [ -z "$zone_id" ]; then
-            dns_log_warn "Could not find zone ID for cleanup"
+            log "Warning: Could not find zone ID for cleanup"
             _cf_state_rm "record" "$domain"
             _cf_state_rm "zone" "$domain"
             return 0
@@ -291,7 +291,7 @@ dns_cloudflare_rm() {
     fi
 
     if [ -n "$record_id" ] && [ "$record_id" != "null" ]; then
-        dns_log_debug "Deleting Cloudflare record ID: $record_id"
+        log "Debug: Deleting Cloudflare record ID: $record_id"
 
         delete_response=""
         if [ -n "$CF_EMAIL_HEADER" ]; then
@@ -303,13 +303,13 @@ dns_cloudflare_rm() {
         success=$(dns_json_get "$delete_response" "success")
 
         if [ "$success" = "true" ]; then
-            dns_log_info "Deleted Cloudflare TXT record"
+            log "Deleted Cloudflare TXT record."
         else
             error_msg=$(dns_json_get "$delete_response" "errors.0.message")
-            dns_log_warn "Failed to delete Cloudflare TXT record: $error_msg"
+            log "Warning: Failed to delete Cloudflare TXT record: $error_msg"
         fi
     else
-        dns_log_warn "No record ID found for cleanup (record may have already been deleted)"
+        log "Warning: No Cloudflare record ID was found during cleanup; the record may already have been deleted."
     fi
 
     # Clean up per-invocation state files and their pointer files.
