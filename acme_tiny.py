@@ -7,7 +7,6 @@ try:
 except ImportError: # pragma: no cover
     from urllib2 import urlopen, Request # Python 2
 
-DEFAULT_CA = "https://acme-v02.api.letsencrypt.org" # DEPRECATED! USE DEFAULT_DIRECTORY_URL INSTEAD
 DEFAULT_DIRECTORY_URL = "https://acme-v02.api.letsencrypt.org/directory"
 
 LOGGER = logging.getLogger(__name__)
@@ -17,23 +16,32 @@ LOGGER.setLevel(logging.INFO)
 def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check=False, directory_url=DEFAULT_DIRECTORY_URL, contact=None, check_port=None, challenge_type="http-01"):
     directory, acct_headers, alg, jwk = None, None, None, None # global variables
 
-    # helper functions - base64 encode for jose spec
-    def _b64(b):
+    def _b64_encode_jose(b):
         return base64.urlsafe_b64encode(b).decode('utf8').replace("=", "")
 
     # helper function - run external commands
-    def _cmd(cmd_list, stdin=None, cmd_input=None, err_msg="Command Line Error"):
+    def _run_external_cmd(cmd_list, stdin=None, cmd_input=None, err_msg="Command Line Error"):
         proc = subprocess.Popen(cmd_list, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         out, err = proc.communicate(cmd_input)
         if proc.returncode != 0:
-            raise IOError("{0}\n{1}".format(err_msg, err))
+            try:
+                error_msg = err.decode('utf8')
+            except UnicodeDecodeError:
+                error_msg = err.decode('utf8', errors='replace')
+            raise IOError("{0}\n{1}".format(err_msg, error_msg))
         return out
 
     # helper function - make request and automatically parse json response
     def _do_request(url, data=None, err_msg="Error", depth=0):
         try:
-            resp = urlopen(Request(url, data=data, headers={"Content-Type": "application/jose+json", "User-Agent": "acme-tiny"}))
+            resp = urlopen(Request(url, data=data, headers={"Content-Type": "application/jose+json", "User-Agent": "acme-tiny"}), timeout=timeout)
             resp_data, code, headers = resp.read().decode("utf8"), resp.getcode(), resp.headers
+        except socket.timeout:
+            raise ValueError("{0}: Request timed out after {1} seconds".format(err_msg, timeout))
+        except URLError as e:
+            if hasattr(e, 'reason') and 'timed out' in str(e.reason):
+                raise ValueError("{0}: Request timed out after {1} seconds".format(err_msg, timeout))
+            raise ValueError("{0}: Network error: {1}".format(err_msg, str(e)))
         except IOError as e:
             resp_data = e.read().decode("utf8") if hasattr(e, "read") else str(e)
             code, headers = getattr(e, "code", None), {}
@@ -49,21 +57,21 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
 
     # helper function - make signed requests
     def _send_signed_request(url, payload, err_msg, depth=0):
-        payload64 = "" if payload is None else _b64(json.dumps(payload).encode('utf8'))
+        payload64 = "" if payload is None else _b64_encode_jose(json.dumps(payload).encode('utf8'))
         new_nonce = _do_request(directory['newNonce'])[2]['Replay-Nonce']
         protected = {"url": url, "alg": alg, "nonce": new_nonce}
         protected.update({"jwk": jwk} if acct_headers is None else {"kid": acct_headers['Location']})
-        protected64 = _b64(json.dumps(protected).encode('utf8'))
+        protected64 = _b64_encode_jose(json.dumps(protected).encode('utf8'))
         protected_input = "{0}.{1}".format(protected64, payload64).encode('utf8')
-        out = _cmd(["openssl", "dgst", "-sha256", "-sign", account_key], stdin=subprocess.PIPE, cmd_input=protected_input, err_msg="OpenSSL Error")
-        data = json.dumps({"protected": protected64, "payload": payload64, "signature": _b64(out)})
+        out = _run_external_cmd(["openssl", "dgst", "-sha256", "-sign", account_key], stdin=subprocess.PIPE, cmd_input=protected_input, err_msg="OpenSSL Error")
+        data = json.dumps({"protected": protected64, "payload": payload64, "signature": _b64_encode_jose(out)})
         try:
             return _do_request(url, data=data.encode('utf8'), err_msg=err_msg, depth=depth)
         except IndexError: # retry bad nonces (they raise IndexError)
             return _send_signed_request(url, payload, err_msg, depth=(depth + 1))
 
     # helper function - poll until complete
-    def _poll_until_not(url, pending_statuses, err_msg):
+    def _poll_until_complete(url, pending_statuses, err_msg):
         result, t0 = None, time.time()
         while result is None or result['status'] in pending_statuses:
             assert (time.time() - t0 < 3600), "Polling timeout" # 1 hour timeout
@@ -115,16 +123,15 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
     pub_exp = "{0:x}".format(int(pub_exp))
     pub_exp = "0{0}".format(pub_exp) if len(pub_exp) % 2 else pub_exp
     alg, jwk = "RS256", {
-        "e": _b64(binascii.unhexlify(pub_exp.encode("utf-8"))),
+        "e": _b64_encode_jose(binascii.unhexlify(pub_exp.encode("utf-8"))),
         "kty": "RSA",
-        "n": _b64(binascii.unhexlify(re.sub(r"(\s|:)", "", pub_hex).encode("utf-8"))),
+        "n": _b64_encode_jose(binascii.unhexlify(re.sub(r"(\s|:)", "", pub_hex).encode("utf-8"))),
     }
     accountkey_json = json.dumps(jwk, sort_keys=True, separators=(',', ':'))
-    thumbprint = _b64(hashlib.sha256(accountkey_json.encode('utf8')).digest())
+    thumbprint = _b64_encode_jose(hashlib.sha256(accountkey_json.encode('utf8')).digest())
 
-    # find domains
-    log.info("Parsing CSR...")
-    out = _cmd(["openssl", "req", "-in", csr, "-noout", "-text"], err_msg="Error loading {0}".format(csr))
+    log.info("Parsing CSR to find domains...")
+    out = _run_external_cmd(["openssl", "req", "-in", csr, "-noout", "-text"], err_msg="Error loading {0}".format(csr))
     domains = set([])
     common_name = re.search(r"Subject:.*? CN\s?=\s?([^\s,;/]+)", out.decode('utf8'))
     if common_name is not None:
@@ -136,9 +143,7 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
                 domains.add(san[4:])
     log.info(u"Found domains: {0}".format(", ".join(domains)))
 
-    # get the ACME directory of urls
-    log.info("Getting directory...")
-    directory_url = CA + "/directory" if CA != DEFAULT_CA else directory_url # backwards compatibility with deprecated CA kwarg
+    log.info("Getting ACME directory of urls...")
     directory, _, _ = _do_request(directory_url, err_msg="Error getting directory")
     log.info("Directory found!")
 
@@ -149,7 +154,7 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
     log.info("{0} Account ID: {1}".format("Registered!" if code == 201 else "Already registered!", acct_headers['Location']))
     if contact is not None:
         account, _, _ = _send_signed_request(acct_headers['Location'], {"contact": contact}, "Error updating contact details")
-        log.info("Updated contact details:\n{0}".format("\n".join(account['contact'])))
+        log.info("Updated contact details:\n{0}".format("\n".join(account.get('contact') or [])))
 
     # create a new order
     log.info("Creating new order...")
@@ -162,8 +167,7 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
         authorization, _, _ = _send_signed_request(auth_url, None, "Error getting challenges")
         domain = authorization['identifier']['value']
 
-        # skip if already valid
-        if authorization['status'] == "valid":
+        if authorization['status'] == "valid": # skip if already valid
             log.info("Already verified: {0}, skipping...".format(domain))
             continue
         log.info("Verifying {0}...".format(domain))
@@ -210,11 +214,11 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
 
     # finalize the order with the csr
     log.info("Signing certificate...")
-    csr_der = _cmd(["openssl", "req", "-in", csr, "-outform", "DER"], err_msg="DER Export Error")
-    _send_signed_request(order['finalize'], {"csr": _b64(csr_der)}, "Error finalizing order")
+    csr_der = _run_external_cmd(["openssl", "req", "-in", csr, "-outform", "DER"], err_msg="DER Export Error")
+    _send_signed_request(order['finalize'], {"csr": _b64_encode_jose(csr_der)}, "Error finalizing order")
 
     # poll the order to monitor when it's done
-    order = _poll_until_not(order_headers['Location'], ["pending", "processing"], "Error checking order status")
+    order = _poll_until_complete(order_headers['Location'], ["pending", "processing"], "Error checking order status")
     if order['status'] != "valid":
         raise ValueError("Order failed: {0}".format(order))
 
@@ -226,21 +230,16 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
 def main(argv=None):
     parser = argparse.ArgumentParser(
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description=textwrap.dedent("""\
-            This script automates the process of getting a signed TLS certificate from Let's Encrypt using the ACME protocol.
-            It will need to be run on your server and have access to your private account key, so PLEASE READ THROUGH IT!
-            It's only ~200 lines, so it won't take long.
-
-            Example Usage: python acme_tiny.py --account-key ./account.key --csr ./domain.csr --acme-dir /usr/share/nginx/html/.well-known/acme-challenge/ > signed_chain.crt
-            """)
+        description="Get a signed TLS certificate from Let's Encrypt using ACME protocol. Supports HTTP-01 and DNS-01 challenges."
     )
+
     parser.add_argument("--account-key", required=True, help="path to your Let's Encrypt account private key")
     parser.add_argument("--csr", required=True, help="path to your certificate signing request")
-    parser.add_argument("--acme-dir", required=True, help="path to the .well-known/acme-challenge/ directory")
+    parser.add_argument("--acme-dir", help="path to the .well-known/acme-challenge/ directory (required for http-01)")
+    parser.add_argument("--challenge-type", default="http-01", choices=["http-01", "dns-01"], help="challenge type to use (dns-01 requires dnsapi/dns_api.sh)")
     parser.add_argument("--quiet", action="store_const", const=logging.ERROR, help="suppress output except for errors")
     parser.add_argument("--disable-check", default=False, action="store_true", help="disable checking if the challenge file is hosted correctly before telling the CA")
     parser.add_argument("--directory-url", default=DEFAULT_DIRECTORY_URL, help="certificate authority directory url, default is Let's Encrypt")
-    parser.add_argument("--ca", default=DEFAULT_CA, help="DEPRECATED! USE --directory-url INSTEAD!")
     parser.add_argument("--contact", metavar="CONTACT", default=None, nargs="*", help="Contact details (e.g. mailto:aaa@bbb.com) for your account-key")
     parser.add_argument("--check-port", metavar="PORT", default=None, help="what port to use when self-checking the challenge file, default is port 80")
     parser.add_argument("--challenge-type", default="http-01", choices=["http-01", "dns-01"], help="ACME challenge type to use (http-01 or dns-01)")

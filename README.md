@@ -2,7 +2,7 @@
 
 `w2c-letsencrypt-esxi` is a lightweight open-source solution to automatically obtain and renew Let's Encrypt certificates on standalone VMware ESXi servers. Packaged as a _VIB archive_ or _Offline Bundle_, install/upgrade/removal is possible directly via the web UI or, alternatively, with just a few SSH commands.
 
-Features:
+## Key Features
 
 - **Fully-automated**: Requesting and renewing certificates without user interaction
 - **Auto-renewal**: A cronjob runs once a week to check if a certificate is due for renewal
@@ -14,6 +14,24 @@ _Successfully tested with ESXi 6.5, 6.7, 7.0, 8.0._
 ## Why?
 
 Many ESXi servers are accessible over the Internet and use self-signed X.509 certificates for TLS connections. This situation not only leads to annoying warnings in the browser when calling the Web UI, but can also be the reason for serious security problems. Despite the enormous popularity of [Let's Encrypt](https://letsencrypt.org), there is no convenient way to automatically request, renew or remove certificates in ESXi.
+
+## Challenge Types
+
+This solution supports two ACME challenge types:
+
+### HTTP-01 Challenge (Default)
+
+- **Use case**: ESXi servers that are publicly accessible over the Internet
+- **Requirements**: Port 80 must be reachable from the Internet
+- **Pros**: Simple setup, no DNS configuration required
+- **Cons**: Requires public accessibility
+
+### DNS-01 Challenge
+
+- **Use case**: ESXi servers that are NOT publicly accessible (behind firewalls, private networks)
+- **Requirements**: API access to your DNS provider
+- **Pros**: Works for private/internal servers, supports wildcard certificates
+- **Cons**: Requires DNS provider configuration
 
 ## Prerequisites
 
@@ -35,13 +53,65 @@ Additional requirements depend on the challenge type you plan to use:
 
 **Note:** As soon as you install this software, any existing, non Let's Encrypt certificate gets replaced!
 
+For **HTTP-01 challenge**: No configuration is required - the system works out of the box with secure defaults.
+
+For **DNS-01 challenge**: You must create a `renew.cfg` file to configure your DNS provider credentials.
+
+### DNS-01 Configuration (Required)
+
+Before using DNS-01 challenge, you need to configure your DNS provider:
+
+1. **Set up your DNS provider credentials:**
+
+   **Cloudflare:** Create an API token at <https://dash.cloudflare.com/profile/api-tokens> with `Zone:Edit` permissions
+
+   **AWS Route53:** Create an IAM user with `Route53:ChangeResourceRecordSets` permissions
+
+   **DigitalOcean:** Create an API token at <https://cloud.digitalocean.com/account/api/tokens> with read/write permissions
+
+   **Namecheap:** Enable API access in account settings and whitelist your ESXi server's IP address
+
+   **GoDaddy:** Create API credentials at <https://developer.godaddy.com/keys>
+
+   **PowerDNS:** Enable the PowerDNS API on your authoritative server
+
+   **DuckDNS:** Create a free account at <https://www.duckdns.org> (only works for `*.duckdns.org` domains)
+
+   **NS1:** Create an API key at <https://my.nsone.net/#/account/settings> with DNS record management permissions
+
+   **Google Cloud DNS:** Create a service account with DNS Administrator role and download the key file
+
+   **Azure DNS:** Create a service principal with DNS Zone Contributor role
+
+2. **Copy the configuration template:**
+
+   ```shellsession
+   cp /opt/w2c-letsencrypt/renew.cfg.example /opt/w2c-letsencrypt/renew.cfg
+   ```
+
+3. **Edit the configuration file:**
+
+   ```shellsession
+   vi /opt/w2c-letsencrypt/renew.cfg
+   ```
+
+4. **Set your challenge type and DNS provider credentials:** Example below shows minimum required configuration for Cloudflare
+
+   ```ini
+   CHALLENGE_TYPE="dns-01"
+
+   DNS_PROVIDER="cloudflare"
+
+   CF_API_TOKEN="your-cloudflare-api-token"
+   ```
+
 ## Install
 
 `w2c-letsencrypt-esxi` can be installed via SSH or the Web UI (= Embedded Host Client).
 
 ### SSH on ESXi
 
-```bash
+```shellsession
 $ wget -O /tmp/w2c-letsencrypt-esxi.vib https://github.com/w2c/letsencrypt-esxi/releases/latest/download/w2c-letsencrypt-esxi.vib
 
 $ esxcli software vib install -v /tmp/w2c-letsencrypt-esxi.vib -f
@@ -67,7 +137,8 @@ $ cat /var/log/syslog.log | grep w2c
 1. _Storage -> Datastores:_ Use the Datastore browser to upload the [VIB file](https://github.com/w2c/letsencrypt-esxi/releases/latest/download/w2c-letsencrypt-esxi.vib) to a datastore path of your choice.
 2. _Manage -> Security & users:_ Set the acceptance level of your host to _Community_.
 3. _Manage -> Packages:_ Switch to the list of installed packages, click on _Install update_ and enter the absolute path on the datastore where your just uploaded VIB file resides.
-4. While the VIB is installed, ESXi requests a certificate from Let's Encrypt. If you reload the Web UI afterwards, the newly requested certificate should already be active. If not, see the [Wiki](https://github.com/w2c/letsencrypt-esxi/wiki) for troubleshooting.
+4. While the VIB is installed, ESXi requests a certificate from Let's Encrypt using HTTP-01 challenge (default). If you want to use DNS-01, configure your DNS provider first (see Configuration section above) and then run `/etc/init.d/w2c-letsencrypt start` via SSH.
+5. If you reload the Web UI afterwards, the newly requested certificate should already be active. If not, see the [Wiki](https://github.com/w2c/letsencrypt-esxi/wiki) for troubleshooting.
 
 ### Configuration
 
@@ -148,7 +219,7 @@ Use the built-in `config` action with the full path to the config file to instal
 
 Remove the installed `w2c-letsencrypt-esxi` package via SSH:
 
-```bash
+```shellsession
 $ esxcli software vib remove -n w2c-letsencrypt-esxi
 Removal Result
    Message: Operation finished successfully.
@@ -168,7 +239,7 @@ For HTTP-01 and DNS-01 with a supported API provider, operation is fully automat
 
 If you change the hostname on our ESXi instance, the domain the certificate is issued for will mismatch. In that case, either re-install `w2c-letsencrypt-esxi` or simply run `/etc/init.d/w2c-letsencrypt start`, e.g.:
 
-```bash
+```shellsession
 $ esxcfg-advcfg -s new-example.com /Misc/hostname
 Value of HostName is new-example.com
 
@@ -192,25 +263,52 @@ Alternatively, if you prefer, you can remove the certificate yourself and then s
 
 ```bash
 rm /etc/vmware/ssl/rui.crt
+
+# Run the renewal process
 /etc/init.d/w2c-letsencrypt start
 ```
 
 ## How does it work?
 
-* Checks if the current certificate is issued by Let's Encrypt and due for renewal (_default:_ 30d in advance)
-* Generates a 4096-bit RSA keypair and CSR
-* Instructs `rhttpproxy` to route all requests to `/.well-known/acme-challenge` to a custom port
-* Configures ESXi firewall to allow outgoing HTTP connections
-* Uses [acme-tiny](https://github.com/diafygi/acme-tiny) for all interactions with Let's Encrypt
-* Starts an HTTP server on a non-privileged port to fulfill Let's Encrypt challenges
-* Installs the retrieved certificate and restarts all services relying on it
-* Adds a cronjob to check periodically if the certificate is due for renewal (_default:_ weekly on Sunday, 00:00)
+The renewal process works differently depending on the challenge type you choose:
+
+### Common Steps
+
+- Checks if the current certificate is issued by Let's Encrypt and due for renewal (_default:_ 30d in advance)
+- Generates a 4096-bit RSA keypair and CSR
+- Configures ESXi firewall to allow required outgoing connections
+- Uses an **enhanced version** of [acme-tiny](https://github.com/diafygi/acme-tiny) for all interactions with Let's Encrypt
+  - Extended with DNS-01 challenge support while maintaining the same lightweight, auditable principles
+  - Improved error handling and Python 3.5 compatibility for ESXi environments
+  - DNS functionality implemented via modular provider framework to keep the core script clean
+- Installs the retrieved certificate and gracefully restarts all services relying on it
+- Adds a cronjob to check periodically if the certificate is due for renewal (_default:_ weekly on Sunday, 00:00)
+
+### HTTP-01 Challenge Flow
+
+- Instructs `rhttpproxy` to route all requests to `/.well-known/acme-challenge` to a custom port
+- Temporarily enables `webAccess` and `vSphereClient` firewall rules if needed
+- Starts an HTTP server on a non-privileged port to fulfill Let's Encrypt challenges
+- Uses settings from `renew.cfg` for staging/production server and renewal intervals
+- Let's Encrypt validates domain ownership by accessing the challenge file via HTTP
+
+### DNS-01 Challenge Flow
+
+- Temporarily enables `httpClient` firewall rule to allow DNS API calls
+- Uses the configured DNS provider (Cloudflare, Route53, DigitalOcean, Namecheap, GoDaddy, PowerDNS, DuckDNS, NS1, Google Cloud DNS, Azure DNS, and manual) to create TXT records
+- Calls `dns_api.sh` framework to manage DNS record creation and cleanup through modular provider plugins
+- Uses settings from `renew.cfg` for DNS provider, API credentials, and propagation timing
+- Leverages enhanced acme-tiny with DNS-01 support, keeping the same lightweight philosophy
+- Let's Encrypt validates domain ownership by checking DNS TXT records
+- Works for private/internal servers and supports wildcard certificates
 
 ## Demo
 
 Here is a sample output when invoking the script manually via SSH using the default settings and the HTTP-01 challenge method:
 
-```bash
+### HTTP-01 Challenge Example
+
+```shellsession
 $ /etc/init.d/w2c-letsencrypt start
 
 Running 'start' action
@@ -250,21 +348,64 @@ vsanperfsvc is not running.
 vvold is not running.
 ```
 
+### DNS-01 Challenge Example
+
+```shellsession
+$ /etc/init.d/w2c-letsencrypt start
+
+Running 'start' action
+Starting certificate renewal.
+Existing cert for example.com not issued by Let's Encrypt. Requesting a new one!
+Generating RSA private key, 4096 bit long modulus
+***************************************************************************++++
+e is 65537 (0x10001)
+Parsing account key...
+Parsing CSR...
+Found domains: example.com
+Getting directory...
+Directory found!
+Registering account...
+Already registered!
+Creating new order...
+Order created!
+Verifying example.com...
+DNS-01 challenge: Creating TXT record _acme-challenge.example.com
+DNS challenge deployed successfully
+Waiting 30 seconds for DNS propagation...
+example.com verified!
+DNS-01 challenge: Removing TXT record _acme-challenge.example.com
+DNS challenge cleanup completed
+Signing certificate...
+Certificate signed!
+Success: Obtained and installed a certificate from Let's Encrypt.
+hostd signalled.
+rabbitmqproxy is not running
+VMware HTTP reverse proxy signalled.
+sfcbd-init: Getting Exclusive access, please wait...
+sfcbd-init: Exclusive access granted.
+vpxa signalled.
+vsanperfsvc is not running.
+/etc/init.d/vvold ssl_reset, PID 2129283
+vvold is not running.
+```
+
 ## Troubleshooting
 
 See the [Wiki](https://github.com/w2c/letsencrypt-esxi/wiki) for possible pitfalls and solutions.
 
 ## License
 
-    w2c-letsencrypt-esxi is free software;
-    you can redistribute it and/or modify it under the terms of the
-    GNU General Public License as published by the Free Software Foundation,
-    either version 3 of the License, or (at your option) any later version.
+```text
+w2c-letsencrypt-esxi is free software;
+you can redistribute it and/or modify it under the terms of the
+GNU General Public License as published by the Free Software Foundation,
+either version 3 of the License, or (at your option) any later version.
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-    GNU General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+```

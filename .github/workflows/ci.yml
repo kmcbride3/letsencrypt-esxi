@@ -14,8 +14,38 @@ on:
   workflow_dispatch:
 
 jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Test Python syntax
+        run: |
+          python3 -m py_compile acme_tiny.py
+          echo "✓ Python syntax validation passed"
+
+      - name: Test shell script syntax
+        run: |
+          bash -n renew.sh
+          bash -n dnsapi/dns_api.sh
+          bash -n test_dns.sh
+          bash -n test_system.sh
+          # Test all DNS provider scripts
+          for dns_script in dnsapi/dns_*.sh; do
+            if [ "$dns_script" != "dnsapi/dns_api.sh" ] && [ -f "$dns_script" ]; then
+              echo "Testing syntax: $dns_script"
+              bash -n "$dns_script"
+            fi
+          done
+          echo "✓ Shell script syntax validation passed"
+
   build:
     name: Build
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -27,6 +57,40 @@ jobs:
 
       - name: Create VIB
         run: /bin/bash ./build/build.sh
+
+      - name: Verify VIB contents
+        run: |
+          # Check that our new DNS files are included
+          if [ -f "artifacts/w2c-letsencrypt-esxi.vib" ]; then
+            mkdir -p /tmp/vib-check
+            cd /tmp/vib-check
+            ar x "$GITHUB_WORKSPACE/artifacts/w2c-letsencrypt-esxi.vib"
+
+            # Verify key files are in the payload
+            echo "Checking VIB payload contents:"
+            tar -tzf payload1 | grep -E "(dns_api\.sh|test_.*\.sh|acme_tiny\.py|renew\.sh)" || true
+
+            # Verify DNS API is executable in payload
+            if tar -tzf payload1 | grep -q "opt/w2c-letsencrypt/dnsapi/dns_api.sh"; then
+              echo "✓ DNS API script included in VIB"
+            else
+              echo "✗ DNS API script missing from VIB"
+              exit 1
+            fi
+
+            if tar -tzf payload1 | grep -q "opt/w2c-letsencrypt/test_system.sh"; then
+              echo "✓ Test scripts included in VIB"
+            else
+              echo "✗ Test scripts missing from VIB"
+              exit 1
+            fi
+          else
+            echo "VIB file not found, checking directory structure:"
+            find . -name "*.vib" -type f
+            ls -la build/ || echo "No build directory"
+            ls -la artifacts/ || echo "No artifacts directory"
+            exit 1
+          fi
 
       - name: Store VIB
         uses: actions/upload-artifact@v7.0.1
@@ -45,11 +109,28 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Retrieve build artifacts
         uses: actions/download-artifact@v8.0.1
         with:
           name: w2c-letsencrypt-esxi
           path: artifacts
+
+      - name: Generate installation notes
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          cat > installation_notes.md << EOF
+          ## 📦 Installation
+
+          \`\`\`bash
+          wget -O /tmp/w2c-letsencrypt-esxi.vib https://github.com/${{ github.repository }}/releases/download/${VERSION}/w2c-letsencrypt-esxi.vib
+          esxcli software vib install -v /tmp/w2c-letsencrypt-esxi.vib -f --no-sig-check
+          \`\`\`
+
+          See the [README](https://github.com/${{ github.repository }}/blob/master/README.md) for configuration and usage instructions.
+          EOF
 
       - name: Create release
         id: create_release

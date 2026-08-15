@@ -341,6 +341,9 @@ if [ -n "$CERT" ]; then
   log "Success: Obtained and installed a certificate from Let's Encrypt."
 elif openssl x509 -checkend 86400 -noout -in "$VMWARE_CRT" 2>/dev/null; then
   log "Warning: No cert obtained from Let's Encrypt. Keeping the existing one as it is still valid."
+  if [ -s acme_error.log ]; then
+    log "acme_tiny.py error output:"; cat acme_error.log | while read line; do log "$line"; done
+  fi
 else
   log "Error: No cert obtained from Let's Encrypt. Generating a self-signed certificate."
   /sbin/generate-certificates 2>/dev/null || { log "Error: Failed to generate self-signed certificate"; exit 1; }

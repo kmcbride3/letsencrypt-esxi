@@ -81,6 +81,36 @@ cp "../${PACKAGE_NAME}" "${INIT_DIR}/"
 # Ensure that config is writable and stickybit is set
 chmod +tw "${BIN_DIR}/renew.cfg.example"
 
+# Only copy renew.cfg.example, do NOT create renew.cfg in the payload
+rm -f ${BIN_DIR}/renew.cfg 2>/dev/null
+
+# Copy DNS API framework and providers
+if [ -d "../dnsapi" ]; then
+    mkdir -p ${BIN_DIR}/dnsapi
+    cp ../dnsapi/* ${BIN_DIR}/dnsapi/
+fi
+
+# Fix line endings for shell scripts (convert Windows CRLF to Unix LF)
+for script in renew.sh test_dns.sh test_system.sh; do
+    if [ -f "${BIN_DIR}/${script}" ]; then
+        sed -i 's/\r$//' "${BIN_DIR}/${script}" 2>/dev/null || true
+    fi
+done
+
+# Fix line endings for DNS API framework and providers
+if [ -f "${BIN_DIR}/dnsapi/dns_api.sh" ]; then
+    sed -i 's/\r$//' "${BIN_DIR}/dnsapi/dns_api.sh" 2>/dev/null || true
+fi
+for dns_script in ${BIN_DIR}/dnsapi/dns_*.sh; do
+    if [ -f "${dns_script}" ]; then
+        sed -i 's/\r$//' "${dns_script}" 2>/dev/null || true
+    fi
+done
+
+if [ -f "${INIT_DIR}/w2c-letsencrypt" ]; then
+    sed -i 's/\r$//' "${INIT_DIR}/w2c-letsencrypt" 2>/dev/null || true
+fi
+
 # Ensure that shell scripts are executable
 chmod +x "${INIT_DIR}/${PACKAGE_NAME}" "${BIN_DIR}/renew.sh" "${BIN_DIR}/dnsapi/dns_api.sh"
 
