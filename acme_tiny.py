@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright Daniel Roesler, under MIT license, see LICENSE at github.com/diafygi/acme-tiny
 #
-import argparse, subprocess, json, os, sys, base64, binascii, time, hashlib, re, copy, textwrap, logging
+import argparse, subprocess, json, os, sys, base64, binascii, time, hashlib, re, copy, textwrap, logging, threading
 try:
     from urllib.request import urlopen, Request # Python 3
 except ImportError: # pragma: no cover
@@ -88,20 +88,24 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
         })
         cmd = ["/bin/sh", api_script, action, domain, token, key_auth_str]
         timeout_seconds = max(int(os.environ.get('DNS_MAX_WAIT', 300)) + 60, 90)
+        proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # use a Timer-based kill for maximum compatibility
+        timed_out = {'flag': False}
+        def _kill_on_timeout():
+            timed_out['flag'] = True
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        timer = threading.Timer(timeout_seconds, _kill_on_timeout)
+        timer.daemon = True
+        timer.start()
         try:
-            proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            # Use communicate with timeout to prevent hanging (Python 2.7 compatible try/except)
-            stdout, stderr = proc.communicate(timeout=timeout_seconds)
-        except Exception as e:
-            # Handle both Python 2.7 (no TimeoutExpired) and Python 3.x (TimeoutExpired exists)
-            exc_type_name = type(e).__name__
-            if exc_type_name == 'TimeoutExpired' or 'timed out' in str(e).lower():
-                try:
-                    proc.kill()
-                except:
-                    pass
-                raise IOError("DNS API script timed out after {0} seconds".format(timeout_seconds))
-            raise
+            stdout, stderr = proc.communicate()
+        finally:
+            timer.cancel()
+        if timed_out['flag']:
+            raise IOError("DNS API script timed out after {0} seconds".format(timeout_seconds))
         if proc.returncode != 0:
             error_msg = stderr.decode('utf8', errors='replace')
             raise IOError("DNS API failed: {0}".format(error_msg))
