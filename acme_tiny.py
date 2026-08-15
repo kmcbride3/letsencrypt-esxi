@@ -1,13 +1,6 @@
 #!/usr/bin/env python3
 # Copyright Daniel Roesler, under MIT license, see LICENSE at github.com/diafygi/acme-tiny
 #
-# ESXi Enhancement: Added DNS-01 challenge support for VMware ESXi environments
-# - Added --challenge-type parameter to support both http-01 and dns-01 challenges
-# - Added _execute_dns_api() function to interface with external DNS API framework
-# - Modified challenge logic to support both HTTP-01 and DNS-01 challenge types
-# - DNS-01 challenges always use active propagation checking for optimal speed and reliability
-# - Maintains full backward compatibility with original http-01 functionality
-#
 import argparse, subprocess, json, os, sys, base64, binascii, time, hashlib, re, copy, textwrap, logging
 try:
     from urllib.request import urlopen, Request # Python 3
