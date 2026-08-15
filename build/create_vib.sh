@@ -78,8 +78,8 @@ if [ ! -f "../${PACKAGE_NAME}" ]; then
 fi
 cp "../${PACKAGE_NAME}" "${INIT_DIR}/"
 
-# Ensure that config is writable and stickybit is set
-chmod +tw "${BIN_DIR}/renew.cfg.example"
+# Ensure that config example is readable but not world-writable
+chmod 0644 "${BIN_DIR}/renew.cfg.example"
 
 # Ensure that shell scripts are executable
 chmod +x "${INIT_DIR}/${PACKAGE_NAME}" "${BIN_DIR}/renew.sh" "${BIN_DIR}/dnsapi/dns_api.sh"
