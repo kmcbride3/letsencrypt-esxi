@@ -385,11 +385,74 @@ dns_http_delete() {
     headers="$2"
     timeout="${3:-$DEFAULT_DNS_TIMEOUT}"
 
+    # Ensure timeout is a bare integer (BusyBox compatible)
+    timeout="$(echo "$timeout" | sed 's/[a-zA-Z]//g')"
+
     log "Debug: HTTP DELETE: $url (timeout: ${timeout}s)"
 
-    # DELETE not supported with wget
-    log "Warning: DELETE method not supported with wget, record may not be cleaned up"
-    return 1
+    # Emit the deferred INSECURE_TLS warning on the first actual HTTPS call.
+    if [ -n "${_WGET_TLS_WARN:-}" ]; then
+        log "Warning: $_WGET_TLS_WARN"
+        _WGET_TLS_WARN=""
+    fi
+
+    ca_bundle=""
+    case "$_WGET_TLS_OPT" in
+        --ca-certificate=*) ca_bundle="${_WGET_TLS_OPT#--ca-certificate=}" ;;
+    esac
+
+    # acme_tiny.py already requires python3 (or python2 via its urllib2 fallback)
+    # to run at all, so it is always available here.
+    py=python3
+    which python3 >/dev/null 2>&1 || py=python
+
+    response=$(DNS_HTTP_URL="$url" DNS_HTTP_HEADERS="$headers" DNS_HTTP_TIMEOUT="$timeout" \
+        DNS_HTTP_CA_BUNDLE="$ca_bundle" DNS_HTTP_INSECURE="${INSECURE_TLS:-0}" \
+        "$py" -c "
+import os, ssl, sys
+try:
+    import urllib.request as urllib_request
+    import urllib.error as urllib_error
+except ImportError:
+    import urllib2 as urllib_request
+    urllib_error = urllib_request
+
+class DeleteRequest(urllib_request.Request):
+    def get_method(self):
+        return 'DELETE'
+
+headers = {}
+for line in os.environ.get('DNS_HTTP_HEADERS', '').splitlines():
+    if ':' in line:
+        k, v = line.split(':', 1)
+        headers[k.strip()] = v.strip()
+
+ctx = ssl.create_default_context()
+if os.environ.get('DNS_HTTP_INSECURE') == '1':
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+elif os.environ.get('DNS_HTTP_CA_BUNDLE'):
+    ctx.load_verify_locations(cafile=os.environ['DNS_HTTP_CA_BUNDLE'])
+
+req = DeleteRequest(os.environ['DNS_HTTP_URL'], headers=headers)
+timeout = float(os.environ.get('DNS_HTTP_TIMEOUT') or 30)
+try:
+    resp = urllib_request.urlopen(req, timeout=timeout, context=ctx)
+    sys.stdout.write(resp.read().decode('utf-8'))
+except urllib_error.HTTPError as e:
+    sys.stdout.write(e.read().decode('utf-8'))
+except Exception as e:
+    sys.stderr.write(str(e) + chr(10))
+    sys.exit(1)
+" 2>&1)
+    exit_code=$?
+    if [ $exit_code -eq 0 ]; then
+        log "Debug: HTTP DELETE response: $response"
+        echo "$response"
+        return 0
+    fi
+    log "Debug: python DELETE failed with exit code $exit_code: $response"
+    return $exit_code
 }
 
 # URL encoding utility (ESXi-compatible)
@@ -786,9 +849,10 @@ dns_load_provider() {
 dns_provider_add() {
     provider="$1"
     domain="$2"
-    txt_value="$3"
+    txt_value="\"$3\""
     retries=0
     func="dns_${provider}_add"
+
     while [ $retries -lt $DEFAULT_MAX_RETRIES ]; do
         if $func "$domain" "$txt_value"; then
             return 0
@@ -806,9 +870,10 @@ dns_provider_add() {
 dns_provider_rm() {
     provider="$1"
     domain="$2"
-    txt_value="$3"
+    txt_value="\"$3\""
     retries=0
     func="dns_${provider}_rm"
+
     while [ $retries -lt $DEFAULT_MAX_RETRIES ]; do
         if $func "$domain" "$txt_value"; then
             return 0
@@ -1001,7 +1066,7 @@ dns_cmd_wait() {
     max_wait=${DNS_MAX_WAIT:-300}  # 5 minute safety limit
     check_interval=15  # Check every 15 seconds
 
-    log "DNS propagation wait for $domain (TXT: ${txt_value:0:20}...)"
+    log "DNS propagation wait for $domain (TXT: $(printf '%.20s' "$txt_value")...)"
     log "Active DNS propagation checking enabled. Maximum wait: ${max_wait} seconds"
 
     # Use the existing comprehensive dns_check_propagation function

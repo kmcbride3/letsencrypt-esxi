@@ -219,8 +219,9 @@ dns_cloudflare_add() {
         return 0
     fi
 
-    # Create new TXT record
-    record_data="{\n        \"type\": \"TXT\",\n        \"name\": \"$record_name\",\n        \"content\": \"$txt_value\",\n        \"ttl\": $CF_TTL,\n        \"proxied\": $CF_PROXY\n    }"
+    # Create new TXT record (JSON-escape quotes already present in txt_value)
+    json_content=$(printf '%s' "$txt_value" | sed 's/"/\\"/g')
+    record_data="{\n        \"type\": \"TXT\",\n        \"name\": \"$record_name\",\n        \"content\": \"$json_content\",\n        \"ttl\": $CF_TTL,\n        \"proxied\": $CF_PROXY\n    }"
 
     log "Debug: [CF] Creating new TXT record: $record_data"
     create_response=""
@@ -293,12 +294,12 @@ dns_cloudflare_rm() {
     if [ -n "$record_id" ] && [ "$record_id" != "null" ]; then
         log "Debug: Deleting Cloudflare record ID: $record_id"
 
-        delete_response=""
-        if [ -n "$CF_EMAIL_HEADER" ]; then
-            delete_response=$(dns_http_delete "$CF_API_BASE/zones/$zone_id/dns_records/$record_id" "$CF_AUTH_HEADER" "$CF_EMAIL_HEADER" "Content-Type: application/json")
-        else
-            delete_response=$(dns_http_delete "$CF_API_BASE/zones/$zone_id/dns_records/$record_id" "$CF_AUTH_HEADER" "Content-Type: application/json")
-        fi
+        headers="$CF_AUTH_HEADER"
+        [ -n "$CF_EMAIL_HEADER" ] && headers="$headers
+$CF_EMAIL_HEADER"
+        headers="$headers
+Content-Type: application/json"
+        delete_response=$(dns_http_delete "$CF_API_BASE/zones/$zone_id/dns_records/$record_id" "$headers")
 
         success=$(dns_json_get "$delete_response" "success")
 
