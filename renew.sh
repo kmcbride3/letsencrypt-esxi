@@ -69,7 +69,7 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then
   fi
   exit 1
 fi
-trap "rmdir '$LOCKDIR' 2>/dev/null" EXIT INT TERM
+trap 'cleanup' EXIT HUP INT TERM
 log "Starting certificate renewal."
 
 # Preparation steps
@@ -84,7 +84,7 @@ if ! grep -q "$LOCALDIR/$LOCALSCRIPT" /var/spool/cron/crontabs/root; then
   if [ -n "$crond_pid" ]; then
     kill -sighup "$crond_pid" 2>/dev/null || true
   fi
-  echo "0    0    *   *   0   /bin/sh $LOCALDIR/$LOCALSCRIPT" >> /var/spool/cron/crontabs/root
+  echo "0    0    *   *   0   /bin/sh $LOCALDIR/$LOCALSCRIPT >> $LOCALDIR/renew.log 2>&1" >> /var/spool/cron/crontabs/root
   crond 2>/dev/null || true
 fi
 
@@ -144,7 +144,14 @@ cleanup_firewall() {
   fi
 }
 
-trap cleanup_firewall EXIT INT TERM
+cleanup() {
+  cleanup_firewall
+  if [ -d "$LOCKDIR" ]; then
+    rmdir "$LOCKDIR" 2>/dev/null || true
+  fi
+}
+
+trap cleanup EXIT HUP INT TERM
 
 # Helper to enable outbound ACME firewall rule and store state
 enable_httpclient_firewall() {
