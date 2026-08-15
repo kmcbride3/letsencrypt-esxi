@@ -7,6 +7,36 @@
 # description: Letsencrypt for ESXi
 #
 
+# Paths for config and backup
+BACKUP_CFG="/etc/renew.cfg.bak"
+TARGET_CFG="/opt/w2c-letsencrypt/renew.cfg"
+EXAMPLE_CFG="/opt/w2c-letsencrypt/renew.cfg.example"
+
+# Config logic: only one action per run, BusyBox/ash compatible
+if [ -f "$TARGET_CFG" ] && [ -f "$BACKUP_CFG" ]; then
+    if [ "$TARGET_CFG" -nt "$BACKUP_CFG" ]; then
+        cp -f "$TARGET_CFG" "$BACKUP_CFG"
+        [ "$DEBUG" = "1" ] && echo "Backed up user renew.cfg to $BACKUP_CFG."
+    elif [ "$BACKUP_CFG" -nt "$TARGET_CFG" ]; then
+        cp -f "$BACKUP_CFG" "$TARGET_CFG"
+        [ "$DEBUG" = "1" ] && echo "Restored user renew.cfg from backup."
+    else
+        [ "$DEBUG" = "1" ] && echo "renew.cfg and backup are the same age. No action taken."
+    fi
+elif [ -f "$TARGET_CFG" ]; then
+    cp -f "$TARGET_CFG" "$BACKUP_CFG"
+    [ "$DEBUG" = "1" ] && echo "Backed up user renew.cfg to $BACKUP_CFG."
+elif [ -f "$BACKUP_CFG" ]; then
+    cp -f "$BACKUP_CFG" "$TARGET_CFG"
+    [ "$DEBUG" = "1" ] && echo "Restored user renew.cfg from backup."
+elif [ -f "$EXAMPLE_CFG" ]; then
+    cp -f "$EXAMPLE_CFG" "$TARGET_CFG"
+    cp -f "$EXAMPLE_CFG" "$BACKUP_CFG"
+    [ "$DEBUG" = "1" ] && echo "Created new renew.cfg from example."
+else
+    [ "$DEBUG" = "1" ] && echo "No renew.cfg, backup, or example found. No action taken."
+fi
+
 export PATH=/sbin:/usr/sbin:/bin:/usr/bin
 
 # Timestamp for backups (YYYYMMDDHHmmSS - second granularity avoids overwriting
