@@ -61,10 +61,12 @@ jobs:
       - name: Verify VIB contents
         run: |
           # Check that our new DNS files are included
-          if [ -f "artifacts/w2c-letsencrypt-esxi.vib" ]; then
+          # VIB filenames are versioned (w2c-letsencrypt-esxi-<tag-or-hash>-<build>.vib), so locate it by glob
+          VIB_FILE=$(find artifacts -maxdepth 1 -name 'w2c-letsencrypt-esxi-*.vib' -type f | head -1)
+          if [ -n "$VIB_FILE" ] && [ -f "$VIB_FILE" ]; then
             mkdir -p /tmp/vib-check
             cd /tmp/vib-check
-            ar x "$GITHUB_WORKSPACE/artifacts/w2c-letsencrypt-esxi.vib"
+            ar x "$GITHUB_WORKSPACE/$VIB_FILE"
 
             # Verify key files are in the payload
             echo "Checking VIB payload contents:"
