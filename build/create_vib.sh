@@ -91,7 +91,7 @@ if [ -d "../dnsapi" ]; then
 fi
 
 # Fix line endings for shell scripts (convert Windows CRLF to Unix LF)
-for script in renew.sh test_dns.sh test_system.sh; do
+for script in renew.sh; do
     if [ -f "${BIN_DIR}/${script}" ]; then
         sed -i 's/\r$//' "${BIN_DIR}/${script}" 2>/dev/null || true
     fi

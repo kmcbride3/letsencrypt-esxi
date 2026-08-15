@@ -32,8 +32,6 @@ jobs:
         run: |
           bash -n renew.sh
           bash -n dnsapi/dns_api.sh
-          bash -n test_dns.sh
-          bash -n test_system.sh
           # Test all DNS provider scripts
           for dns_script in dnsapi/dns_*.sh; do
             if [ "$dns_script" != "dnsapi/dns_api.sh" ] && [ -f "$dns_script" ]; then
@@ -70,20 +68,13 @@ jobs:
 
             # Verify key files are in the payload
             echo "Checking VIB payload contents:"
-            tar -tzf payload1 | grep -E "(dns_api\.sh|test_.*\.sh|acme_tiny\.py|renew\.sh)" || true
+            tar -tzf payload1 | grep -E "(dns_api\.sh|acme_tiny\.py|renew\.sh)" || true
 
             # Verify DNS API is executable in payload
             if tar -tzf payload1 | grep -q "opt/w2c-letsencrypt/dnsapi/dns_api.sh"; then
               echo "✓ DNS API script included in VIB"
             else
               echo "✗ DNS API script missing from VIB"
-              exit 1
-            fi
-
-            if tar -tzf payload1 | grep -q "opt/w2c-letsencrypt/test_system.sh"; then
-              echo "✓ Test scripts included in VIB"
-            else
-              echo "✗ Test scripts missing from VIB"
               exit 1
             fi
           else
