@@ -61,7 +61,7 @@ if [ "$1" = "config" ]; then
       chmod +x /etc/rc.local.d/local.sh
    fi
 
-   grep -Fq "cp \"${CFG_PATH}\" /opt/w2c-letsencrypt/renew.cfg" /etc/rc.local.d/local.sh 2>/dev/null || \
+   grep -Fq "cp \"${CFG_PATH}\" /opt/w2c-letsencrypt/ &&" /etc/rc.local.d/local.sh 2>/dev/null || \
       sed -i "/exit 0/i mkdir -p /opt/w2c-letsencrypt && cp \"${CFG_PATH}\" /opt/w2c-letsencrypt/ && chmod 600 /opt/w2c-letsencrypt/renew.cfg && chown root:root /opt/w2c-letsencrypt/renew.cfg" /etc/rc.local.d/local.sh
 
    if [ -x /sbin/auto-backup.sh ]; then
