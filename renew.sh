@@ -44,6 +44,14 @@ DNS_PROVIDER="${DNS_PROVIDER:-}"
 DNS_MAX_WAIT="${DNS_MAX_WAIT:-300}"
 DEBUG="${DEBUG:-0}"
 
+# Reject non-integer DNS_MAX_WAIT before it reaches any numeric comparison
+case "$DNS_MAX_WAIT" in
+  ''|*[!0-9]*)
+    log "Warning: DNS_MAX_WAIT ('$DNS_MAX_WAIT') is not a valid integer, falling back to 600 seconds"
+    DNS_MAX_WAIT=600
+    ;;
+esac
+
 # Validate and cap DNS max wait to prevent excessive waits
 if [ "$CHALLENGE_TYPE" = "dns-01" ] && [ "$DNS_MAX_WAIT" -gt 600 ]; then
   log "Warning: DNS_MAX_WAIT is set to $DNS_MAX_WAIT seconds (>10 minutes), capping at 600 seconds"
@@ -336,8 +344,12 @@ fi
 if [ -n "$CERT" ]; then
   echo "$CERT" > "$CRT" || { log "Error: Failed to write certificate to $CRT"; exit 1; }
   # Provide the certificate to ESXi
-  cp -p "$LOCALDIR/$KEY" "$VMWARE_KEY" || { log "Error: Failed to copy private key to $VMWARE_KEY"; exit 1; }
-  cp -p "$LOCALDIR/$CRT" "$VMWARE_CRT" || { log "Error: Failed to install certificate to $VMWARE_CRT"; exit 1; }
+   key_src="$KEY"
+   crt_src="$CRT"
+   case "$key_src" in /*) ;; *) key_src="$LOCALDIR/$key_src" ;; esac
+   case "$crt_src" in /*) ;; *) crt_src="$LOCALDIR/$crt_src" ;; esac
+   cp -p "$key_src" "$VMWARE_KEY" || { log "Error: Failed to copy private key to $VMWARE_KEY"; exit 1; }
+   cp -p "$crt_src" "$VMWARE_CRT" || { log "Error: Failed to install certificate to $VMWARE_CRT"; exit 1; }
   log "Success: Obtained and installed a certificate from Let's Encrypt."
 elif openssl x509 -checkend 86400 -noout -in "$VMWARE_CRT" 2>/dev/null; then
   log "Warning: No cert obtained from Let's Encrypt. Keeping the existing one as it is still valid."
