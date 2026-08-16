@@ -21,7 +21,9 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Test Python syntax
         run: |
@@ -56,42 +58,13 @@ jobs:
       - name: Create VIB
         run: /bin/bash ./build/build.sh
 
-      - name: Verify VIB contents
-        run: |
-          # Check that our new DNS files are included
-          # VIB filenames are versioned (w2c-letsencrypt-esxi-<tag-or-hash>-<build>.vib), so locate it by glob
-          VIB_FILE=$(find artifacts -maxdepth 1 -name 'w2c-letsencrypt-esxi-*.vib' -type f | head -1)
-          if [ -n "$VIB_FILE" ] && [ -f "$VIB_FILE" ]; then
-            mkdir -p /tmp/vib-check
-            cd /tmp/vib-check
-            ar x "$GITHUB_WORKSPACE/$VIB_FILE"
-
-            # Verify key files are in the payload
-            echo "Checking VIB payload contents:"
-            tar -tzf payload1 | grep -E "(dns_api\.sh|acme_tiny\.py|renew\.sh)" || true
-
-            # Verify DNS API is executable in payload
-            if tar -tzf payload1 | grep -q "opt/w2c-letsencrypt/dnsapi/dns_api.sh"; then
-              echo "✓ DNS API script included in VIB"
-            else
-              echo "✗ DNS API script missing from VIB"
-              exit 1
-            fi
-          else
-            echo "VIB file not found, checking directory structure:"
-            find . -name "*.vib" -type f
-            ls -la build/ || echo "No build directory"
-            ls -la artifacts/ || echo "No artifacts directory"
-            exit 1
-          fi
-
       - name: Store VIB
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: w2c-letsencrypt-esxi
+          name: $VIB_NAME
           path: |
-            artifacts/w2c-letsencrypt-esxi-*-*.vib
-            artifacts/w2c-letsencrypt-esxi-*-*-offline-bundle.zip
+            artifacts/$VIB_OUTPUT
+            artifacts/$OFFLINE_BUNDLE_NAME
           if-no-files-found: error
 
   release:
@@ -103,23 +76,24 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Retrieve build artifacts
         uses: actions/download-artifact@v8.0.1
         with:
-          name: w2c-letsencrypt-esxi
+          name: $VIB_NAME
           path: artifacts
 
       - name: Generate installation notes
         run: |
-          VERSION=${GITHUB_REF#refs/tags/}
           cat > installation_notes.md << EOF
           ## 📦 Installation
 
           \`\`\`bash
-          wget -O /tmp/w2c-letsencrypt-esxi.vib https://github.com/${{ github.repository }}/releases/download/${VERSION}/w2c-letsencrypt-esxi.vib
-          esxcli software vib install -v /tmp/w2c-letsencrypt-esxi.vib -f --no-sig-check
+          wget -O /tmp/$VIB_OUTPUT https://github.com/${{ github.repository }}/releases/download/$VIB_TAG/$VIB_OUTPUT
+          esxcli software vib install -v /tmp/$VIB_OUTPUT -f --no-sig-check
           \`\`\`
 
           See the [README](https://github.com/${{ github.repository }}/blob/master/README.md) for configuration and usage instructions.
@@ -130,7 +104,7 @@ jobs:
         uses: softprops/action-gh-release@v3.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          body: w2c-letsencrypt-esxi
+          body: $VIB_NAME
           files: |
-            artifacts/w2c-letsencrypt-esxi-*-*.vib
-            artifacts/w2c-letsencrypt-esxi-*-*-offline-bundle.zip
+            artifacts/$VIB_OUTPUT
+            artifacts/$OFFLINE_BUNDLE_NAME

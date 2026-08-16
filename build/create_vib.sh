@@ -46,6 +46,15 @@ OFFLINE_BUNDLE_NAME="${VIB_NAME}-${VIB_VERSION}-offline-bundle.zip"
 PAYLOAD_ARCHIVE="${STAGING_DIR}/payload1"
 VIB_PAYLOAD_DIR="${STAGING_DIR}/payloads/payload1"
 
+# Set GitHub Actions environment variables for build metadata
+echo "VIB_DATE=${VIB_DATE}" >> $GITHUB_ENV
+echo "VIB_TAG=${VIB_TAG}" >> $GITHUB_ENV
+echo "VIB_BUILD=${VIB_BUILD}" >> $GITHUB_ENV
+echo "VIB_NAME=${VIB_NAME}" >> $GITHUB_ENV
+echo "VIB_VERSION=${VIB_VERSION}" >> $GITHUB_ENV
+echo "VIB_OUTPUT=${VIB_OUTPUT}" >> $GITHUB_ENV
+echo "OFFLINE_BUNDLE_NAME=${OFFLINE_BUNDLE_NAME}" >> $GITHUB_ENV
+
 # Create VIB spec payload directory (and all parent directories)
 mkdir -p "${VIB_PAYLOAD_DIR}"
 
