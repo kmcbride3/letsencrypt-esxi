@@ -7,13 +7,7 @@
 - **Fully-automated**: Requesting and renewing certificates without user interaction
 - **Auto-renewal**: A cronjob runs once a week to check if a certificate is due for renewal
 - **Persistent**: The certificate, private key and all settings are preserved over ESXi upgrades
-- **Configurable**: Customizable parameters for renewal interval, Let's Encrypt (ACME) backend, etc
-- **Flexible Challenge Types**: Supports both HTTP-01 and DNS-01 ACME challenges
-- **DNS-01 Support**: Multiple DNS providers supported (Cloudflare, Route53, DigitalOcean, Namecheap, GoDaddy, PowerDNS, DuckDNS, NS1, Google Cloud DNS, Azure DNS, Manual)
-- **Robust Error Handling**: Exponential backoff retry logic with permanent vs. transient error detection
-- **Advanced DNS Features**: Multi-resolver propagation checking, authoritative nameserver validation
-- **Performance Optimized**: Intelligent caching system and rate limiting protection
-- **ESXi Optimized**: Designed specifically for ESXi 6.5+ BusyBox shell environment
+- **Configurable**: Customizable parameters for challenge type, renewal interval, Let's Encrypt (ACME) backend, etc
 
 _Successfully tested with ESXi 6.5, 6.7, 7.0, 8.0._
 
@@ -41,19 +35,21 @@ This solution supports two ACME challenge types:
 
 ## Prerequisites
 
-**Important Note**: ESXi servers use self-signed certificates by default (often using a non-FQDN hostname, such as `localhost.localdomain`). The requirement for a real domain name is a Let's Encrypt policy limitation, not a technical ESXi requirement. Let's Encrypt does not currently support certificates for localhost or IP addresses, though [RFC 8738](https://www.rfc-editor.org/rfc/rfc8738) support was planned but has been indefinitely shelved.
+Before installing `w2c-letsencrypt-esxi`, ensure the following preconditions are met.
 
-### For HTTP-01 Challenge (Default)
+- A _Fully Qualified Domain Name (FQDN)_ must be set in ESXi. Something like `localhost.localdomain` will not work.
+
+Additional requirements depend on the challenge type you plan to use:
+
+### HTTP-01 Challenges
 
 - Your server is publicly reachable over the Internet
-- A _Fully Qualified Domain Name (FQDN)_ is set in ESXi
 - The hostname you specified can be resolved via A and/or AAAA records in the corresponding DNS zone
 
-### For DNS-01 Challenge
+### DNS-01 Challenges
 
-- A _Fully Qualified Domain Name (FQDN)_ is set in ESXi (does not need to be publicly accessible)
-- Access to your DNS provider's API (see supported providers above)
-- API credentials for your DNS provider
+- Your server _does not_ need to be publicly reachable over the Internet; this method also allows wildcard certificates
+- You must be able to manage DNS records for your domain (API credentials for supported providers, or manual access)
 
 **Note:** As soon as you install this software, any existing, non Let's Encrypt certificate gets replaced!
 
@@ -122,12 +118,12 @@ $ esxcli software vib install -v /tmp/w2c-letsencrypt-esxi.vib -f
 Installation Result
    Message: Operation finished successfully.
    Reboot Required: false
-   VIBs Installed: web-wack-creations_bootbank_w2c-letsencrypt-esxi_1.0.0-0.0.0
+   VIBs Installed: web-wack-creations_bootbank_w2c-letsencrypt-esxi_1.0.0-836582
    VIBs Removed:
    VIBs Skipped:
 
 $ esxcli software vib list | grep w2c
-w2c-letsencrypt-esxi  1.0.0-0.0.0  web-wack-creations  CommunitySupported  2022-05-29
+w2c-letsencrypt-esxi  1.0.0-836582  web-wack-creations  CommunitySupported  2022-05-29
 
 $ cat /var/log/syslog.log | grep w2c
 2022-05-29T20:01:46Z /etc/init.d/w2c-letsencrypt: Running 'start' action
@@ -144,152 +140,80 @@ $ cat /var/log/syslog.log | grep w2c
 4. While the VIB is installed, ESXi requests a certificate from Let's Encrypt using HTTP-01 challenge (default). If you want to use DNS-01, configure your DNS provider first (see Configuration section above) and then run `/etc/init.d/w2c-letsencrypt start` via SSH.
 5. If you reload the Web UI afterwards, the newly requested certificate should already be active. If not, see the [Wiki](https://github.com/w2c/letsencrypt-esxi/wiki) for troubleshooting.
 
-### Configuration (Optional for HTTP-01)
+### Configuration
 
-DNS-01 challenges require configuration of the DNS provider by creating a `renew.cfg` file. You have the option of customizing the behavior for either challenge type through this file as well. A comprehensive template (`renew.cfg.example`) is included for reference - copy it as your starting point:
+An optional `renew.cfg` allows for using DNS-01 challenges and/or modifying default renewal period during the renewal process. It is **not necessary when using HTTP-01 challenges** and renewing certificates every 30 days. It is required when using DNS-01 challenges to specify your DNS provider and the necessary credentials (API token, keys, etc.), test renewal in the staging environment, modify renewal frequency, and for other advanced configuration. See [`renew.cfg.example`](renew.cfg.example) for all available settings and DNS provider variables.
 
-```shellsession
-cp /opt/w2c-letsencrypt/renew.cfg.example /opt/w2c-letsencrypt/renew.cfg
-vi /opt/w2c-letsencrypt/renew.cfg
+It is recommended that you copy the provided example config to a persistent datastore and edit it there:
+
+```bash
+cp /opt/w2c-letsencrypt/renew.cfg.example /vmfs/volumes/<YOUR DATASTORE>/<PATH TO CONFIG>/renew.cfg
+vi /vmfs/volumes/<YOUR DATASTORE>/<PATH TO CONFIG>/renew.cfg
 ```
 
-Example configuration showing key settings you can customize. All settings are commented out (using `#`) to match the template - uncomment and modify as needed:
+#### Common configuration examples
 
-```ini
-# Let's Encrypt ESXi Configuration Template
-#
-# USAGE:
-# 1. Copy this file: cp renew.cfg.example renew.cfg
-# 2. Edit renew.cfg and uncomment/configure settings as needed
-# 3. For HTTP-01 (default): No configuration required - works out of the box
-# 4. For DNS-01: Uncomment CHALLENGE_TYPE, DNS_PROVIDER, and provider credentials
-#
-# This file is safe to use as-is with default HTTP-01 behavior.
-# All non-default settings are commented out to prevent configuration errors.
+- **Use Let's Encrypt staging environment and change the renewal interval:**
 
-# =============================================================================
-# LET'S ENCRYPT SETTINGS
-# =============================================================================
-# Let's Encrypt server URL (default: production)
-# Uncomment below line for staging/testing (issues test certificates)
-#DIRECTORY_URL="https://acme-staging-v02.api.letsencrypt.org/directory"
+    ```bash
+    DIRECTORY_URL="https://acme-staging-v02.api.letsencrypt.org/directory"
+    RENEW_DAYS=15
+    ```
 
-# Certificate renewal interval in days (default: 30)
-# Certificates are renewed this many days before expiration
-#RENEW_DAYS=14
+- **Enable DNS-01 challenge (Cloudflare):**
 
-# Domain name for certificate (default: uses ESXi hostname)
-# Override only if hostname doesn't match desired certificate domain
-#DOMAIN=$(hostname -f)
+    ```bash
+    CHALLENGE_TYPE="dns-01"
+    DNS_PROVIDER="cloudflare"
+    CF_API_TOKEN="your-cloudflare-api-token"
+    ```
 
-# Challenge type: "http-01" or "dns-01" (default: "http-01")
-#CHALLENGE_TYPE="dns-01"
+- **Enable DNS-01 challenge (manual):**
 
-# =============================================================================
-# DNS PROVIDER CONFIGURATION (Required for DNS-01)
-# =============================================================================
-# Primary DNS provider - choose one:
-# Supported: cloudflare, route53, digitalocean, namecheap, godaddy, powerdns,
-#           duckdns, ns1, gcloud, azure, manual
-#DNS_PROVIDER="cloudflare"
+    ```bash
+    CHALLENGE_TYPE="dns-01"
+    DNS_PROVIDER="manual"
+    ```
 
-# ⚠️  WARNING: The "manual" provider requires user interaction and will NOT work
-#    with automated renewals (cron jobs). Use only for testing or one-time
-#    certificate generation. For production ESXi deployments, use an automated
-#    provider like cloudflare, route53, gcloud, azure, etc.
+    You will be prompted to create and remove DNS TXT records interactively. Certificates obtained this way cannot be renewed automatically, as manual intervention is always required.
 
-# DNS challenge settings
-#DNS_PROPAGATION_WAIT=120        # Seconds to wait for DNS propagation
-#DNS_PROPAGATION_CHECK=1         # Enable active DNS propagation checking (1) or use fixed wait (0)
-#DNS_TIMEOUT=30                  # API request timeout in seconds
-#MAX_RETRIES=3                   # Maximum retry attempts for failed API calls
-#RETRY_DELAY=5                   # Base delay between retries (exponential backoff)
-#DEBUG=0                         # Enable debug logging (0=off, 1=on)
-#DNS_CACHE_TTL=120               # Cache TTL in seconds (2 minutes for ESXi)
+**Note:** Automated renewal is only supported for providers with API support (e.g., Cloudflare).
 
-# DNS provider-specific settings
-# Uncomment and configure the provider you want to use
+#### Persisting configuration
 
-# Cloudflare
-# Create an API token at https://dash.cloudflare.com/profile/api-tokens with Zone:Edit permissions
-#CF_API_TOKEN="your-cloudflare-api-token"
+Once the configuration file has been updated, you will need to take additional steps to make it persist between reboots. There are two options provided to assist with doing so.
 
-# OR use Global API Key (legacy method)
-# #CF_API_KEY="your-cloudflare-api-key"
-# #CF_EMAIL="your-cloudflare-account-email"
+##### Option 1: Built-in `config` action (recommended)
 
-# Cloudflare-specific settings
-#CF_TTL=120                      # TTL for DNS records (seconds)
-#CF_PROXY=false                  # Enable Cloudflare proxy for records (true/false)
+Use the built-in `config` action with the full path to the config file to install and persist it (by copying it to `/opt/w2c-letsencrypt`, updating `/etc/rc.local.d/local.sh` (after creating a backup), and running `/sbin/auto-backup.sh`):
 
-# Amazon Route53
-# Create an IAM user on AWS with Route53:ChangeResourceRecordSets permissions
-#AWS_ACCESS_KEY_ID="your-access-key"
-#AWS_SECRET_ACCESS_KEY="your-secret-key"
-#AWS_DEFAULT_REGION="us-east-1"
-
-# Route53-specific settings
-#R53_TTL=120                     # TTL for DNS records (seconds)
-#R53_HOSTED_ZONE_ID=""          # Optional: specify zone ID directly
-
-# Google Cloud DNS
-# Create a service account with DNS Administrator role and download the key file
-#GCLOUD_SERVICE_ACCOUNT_FILE="/path/to/service-account-key.json"
-
-# Azure DNS
-# Create a service principal with DNS Zone Contributor role
-#AZURE_CLIENT_ID="your-azure-client-id"
-#AZURE_CLIENT_SECRET="your-azure-client-secret"
-#AZURE_TENANT_ID="your-azure-tenant-id"
-#AZURE_SUBSCRIPTION_ID="your-azure-subscription-id"
-
-# DigitalOcean
-# Create an API token at https://cloud.digitalocean.com/account/api/tokens
-#DO_API_TOKEN="your-digitalocean-api-token"
-
-# DigitalOcean-specific settings
-#DO_TTL=120                      # TTL for DNS records (seconds)
-
-# Namecheap
-# Enable API access in account settings and whitelist your ESXi server's IP address
-#NAMECHEAP_API_USER="your-namecheap-api-user"
-#NAMECHEAP_API_KEY="your-namecheap-api-key"
-#NAMECHEAP_USERNAME="your-namecheap-username"
-
-# GoDaddy
-# Create API credentials at https://developer.godaddy.com/keys
-#GODADDY_API_KEY="your-godaddy-api-key"
-#GODADDY_API_SECRET="your-godaddy-api-secret"
-
-# PowerDNS
-# Enable the PowerDNS API on your authoritative server
-#POWERDNS_API_URL="https://your-powerdns-server:8081"
-#POWERDNS_API_KEY="your-powerdns-api-key"
-
-# DuckDNS
-# Create a free account at https://www.duckdns.org (only works for *.duckdns.org domains)
-#DUCKDNS_TOKEN="your-duckdns-token"
-
-# NS1
-# Create an API key at https://my.nsone.net/#/account/settings with DNS record management permissions
-#NS1_API_KEY="your-ns1-api-key"
-
-# =============================================================================
-# ADVANCED SETTINGS (rarely need to change)
-# =============================================================================
-# File paths for certificates and keys
-# Override only if you need custom file locations
-#ACCOUNTKEY="esxi_account.key"
-#KEY="esxi.key"
-#CSR="esxi.csr"
-#CRT="esxi.crt"
-#VMWARE_CRT="/etc/vmware/ssl/rui.crt"
-#VMWARE_KEY="/etc/vmware/ssl/rui.key"
-
-# =============================================================================
+```bash
+/etc/init.d/w2c-letsencrypt config /vmfs/volumes/<YOUR DATASTORE>/<PATH TO CONFIG>/renew.cfg
 ```
 
-To apply your modifications, run `/etc/init.d/w2c-letsencrypt start`
+##### Option 2: Manage persistence manually
+
+1. Copy it into place for the current boot and secure it:
+
+    ```bash
+    cp /vmfs/volumes/<YOUR DATASTORE>/<PATH TO CONFIG>/renew.cfg /opt/w2c-letsencrypt/renew.cfg
+    chmod 600 /opt/w2c-letsencrypt/renew.cfg
+    chown root:root /opt/w2c-letsencrypt/renew.cfg
+    ```
+
+2. Back up and modify `/etc/rc.local.d/local.sh` to copy the datastore config on boot (insert the cp line before the final `exit 0`):
+
+    ```bash
+    cp /etc/rc.local.d/local.sh /etc/rc.local.d/local.sh.bak.YYYYMMDD
+    # add before exit 0
+    mkdir -p /opt/w2c-letsencrypt && cp /vmfs/volumes/<YOUR DATASTORE>/<PATH TO CONFIG>/renew.cfg /opt/w2c-letsencrypt/ && chmod 600 /opt/w2c-letsencrypt/renew.cfg && chown root:root /opt/w2c-letsencrypt/renew.cfg
+    ```
+
+3. Persist the edited `local.sh` so ESXi will keep it across reboots:
+
+    ```bash
+    /sbin/auto-backup.sh
+    ```
 
 ## Uninstall
 
@@ -305,11 +229,11 @@ Removal Result
    VIBs Skipped:
 ```
 
-This action will purge `w2c-letsencrypt-esxi`, undo any changes to system files (cronjob and port redirection) and finally call `/sbin/generate-certificates` to generate and install a new, self-signed certificate.
+This action will purge `w2c-letsencrypt-esxi`, undo any changes to system files (cronjob, local.sh, and port redirection) edited during installation or made through the `config`, and finally call `/sbin/generate-certificates` to generate and install a new, self-signed certificate.
 
 ## Usage
 
-Usually, fully-automated. No interaction required.
+For HTTP-01 and DNS-01 with a supported API provider, operation is fully automated and requires no user interaction. For manual DNS-01, as you must interactively create and remove DNS TXT records each time, certificates cannot be renewed automatically.
 
 ### Hostname Change
 
@@ -329,35 +253,15 @@ Generating RSA private key, 4096 bit long modulus
 
 ### Force Renewal
 
-You already have a valid certificate from Let's Encrypt but nonetheless want to renew it now:
+You already have a valid certificate from Let's Encrypt but nonetheless want to renew it now. A safe method is provided through the `force` action:
 
-```shellsession
-rm /etc/vmware/ssl/rui.crt
-/etc/init.d/w2c-letsencrypt start
+```bash
+/etc/init.d/w2c-letsencrypt force
 ```
 
-## Testing Your Configuration
+Alternatively, if you prefer, you can remove the certificate yourself and then start renewal:
 
-Before running the certificate renewal, you can test your setup:
-
-### Test DNS Provider Configuration (DNS-01 only)
-
-```shellsession
-# Test DNS record creation/deletion with the modular DNS API framework
-/opt/w2c-letsencrypt/test_dns.sh
-```
-
-### Test System Prerequisites
-
-```shellsession
-# Check system compatibility and network connectivity
-/opt/w2c-letsencrypt/test_system.sh
-```
-
-### Dry Run Certificate Renewal
-
-```shellsession
-# Remove existing certificate to force renewal (if needed)
+```bash
 rm /etc/vmware/ssl/rui.crt
 
 # Run the renewal process
@@ -400,7 +304,7 @@ The renewal process works differently depending on the challenge type you choose
 
 ## Demo
 
-Here are sample outputs when invoking the script manually via SSH:
+Here is a sample output when invoking the script manually via SSH using the default settings and the HTTP-01 challenge method:
 
 ### HTTP-01 Challenge Example
 

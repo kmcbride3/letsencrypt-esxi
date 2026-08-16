@@ -3,114 +3,82 @@
 # Copyright (c) Johannes Feichtner <johannes@web-wack.at>
 # Released under the GNU GPLv3 License.
 
-DOMAIN=$(hostname -f)
-LOCALDIR=$(dirname "$(readlink -f "$0")")
+# ESXi-compatible path resolution - fallback if readlink -f is not available
+if readlink -f "$0" >/dev/null 2>&1; then
+  LOCALDIR=$(dirname "$(readlink -f "$0")")
+else
+  # Fallback for BusyBox versions without readlink -f
+  LOCALDIR=$(cd "$(dirname "$0")" && pwd)
+fi
 LOCALSCRIPT=$(basename "$0")
 
-ACMEDIR="$LOCALDIR/.well-known/acme-challenge"
-DIRECTORY_URL="https://acme-v02.api.letsencrypt.org/directory"
-SSL_CERT_FILE="$LOCALDIR/ca-certificates.crt"
-RENEW_DAYS=30
-
-# Default to HTTP-01 challenge
-CHALLENGE_TYPE="http-01"
-DNS_PROVIDER=""
-DNS_PROPAGATION_WAIT=30
-
-ACCOUNTKEY="esxi_account.key"
-KEY="esxi.key"
-CSR="esxi.csr"
-CRT="esxi.crt"
-VMWARE_CRT="/etc/vmware/ssl/rui.crt"
-VMWARE_KEY="/etc/vmware/ssl/rui.key"
-
-if [ -r "$LOCALDIR/renew.cfg" ]; then
-  . "$LOCALDIR/renew.cfg"
-fi
-
-export DOMAIN
-export RENEW_DAYS
-export CHALLENGE_TYPE
-export DNS_PROVIDER
-export DNS_PROPAGATION_WAIT
-export CF_API_TOKEN
-export CF_API_KEY
-export CF_EMAIL
-export AWS_ACCESS_KEY_ID
-export AWS_SECRET_ACCESS_KEY
-export AWS_DEFAULT_REGION
-export DIRECTORY_URL
-export CONTACT_EMAIL
-export ACCOUNTKEY
-export KEY
-export CSR
-export CRT
-export VMWARE_CRT
-export VMWARE_KEY
-export SSL_CERT_FILE
-
+# Define log function early so it can be used throughout the script
 log() {
-   echo "$@"
+   echo "$@" >&2
    logger -p daemon.info -t "$0" "$@"
 }
 
-# Detect if we're running in an automated context (cron, etc.)
-is_automated_run() {
-    # Check if stdin is not a terminal (typical for cron jobs)
-    if [ ! -t 0 ]; then
-        return 0
-    fi
+# Load user configuration from the install directory if present.
+CONFIG="$LOCALDIR/renew.cfg"
+if [ -r "${CONFIG}" ]; then
+  . "${CONFIG}"
+  log "Loaded configuration from ${CONFIG}"
+elif [ -f "${CONFIG}" ]; then
+  log "Warning: ${CONFIG} exists but is not readable (check permissions)"
+fi
 
-    # Check if we're running from cron (no TERM variable usually set)
-    if [ -z "$TERM" ] || [ "$TERM" = "dumb" ]; then
-        return 0
-    fi
+# Ensure defaults are present even if renew.cfg leaves values unset/empty.
+DOMAIN="${DOMAIN:-$(hostname -f)}"
+ACMEDIR="${ACMEDIR:-$LOCALDIR/.well-known/acme-challenge}"
+DIRECTORY_URL="${DIRECTORY_URL:-https://acme-v02.api.letsencrypt.org/directory}"
+SSL_CERT_FILE="${SSL_CERT_FILE:-$LOCALDIR/ca-certificates.crt}"
+RENEW_DAYS="${RENEW_DAYS:-30}"
+ACCOUNTKEY="${ACCOUNTKEY:-esxi_account.key}"
+KEY="${KEY:-esxi.key}"
+CSR="${CSR:-esxi.csr}"
+CRT="${CRT:-esxi.crt}"
+VMWARE_CRT="${VMWARE_CRT:-/etc/vmware/ssl/rui.crt}"
+VMWARE_KEY="${VMWARE_KEY:-/etc/vmware/ssl/rui.key}"
+CHALLENGE_TYPE="${CHALLENGE_TYPE:-http-01}"
+DNS_PROVIDER="${DNS_PROVIDER:-}"
+DNS_MAX_WAIT="${DNS_MAX_WAIT:-300}"
+DEBUG="${DEBUG:-0}"
 
-    # Check for specific cron environment indicators
-    if [ -n "$CRON" ]; then
-        return 0
-    fi
+# Reject non-integer DNS_MAX_WAIT before it reaches any numeric comparison
+case "$DNS_MAX_WAIT" in
+  ''|*[!0-9]*)
+    log "Warning: DNS_MAX_WAIT ('$DNS_MAX_WAIT') is not a valid integer, falling back to 600 seconds"
+    DNS_MAX_WAIT=600
+    ;;
+esac
 
-    # Check if parent process is crond (more reliable than user check)
-    if ps -o comm= -p $PPID 2>/dev/null | grep -q "crond"; then
-        return 0
-    fi
+# Validate and cap DNS max wait to prevent excessive waits
+if [ "$CHALLENGE_TYPE" = "dns-01" ] && [ "$DNS_MAX_WAIT" -gt 600 ]; then
+  log "Warning: DNS_MAX_WAIT is set to $DNS_MAX_WAIT seconds (>10 minutes), capping at 600 seconds"
+  DNS_MAX_WAIT=600
+fi
 
-    return 1
-}
+# Export configuration variables (excluding credentials which will be passed inline to subprocesses)
+export CHALLENGE_TYPE DNS_PROVIDER DNS_MAX_WAIT \
+  DIRECTORY_URL CONTACT_EMAIL DEBUG \
+  KEY CSR CRT VMWARE_CRT VMWARE_KEY SSL_CERT_FILE
 
-# Cleanup function to restore firewall rules
-cleanup_firewall() {
-  if [ "$CHALLENGE_TYPE" = "http-01" ]; then
-    # Kill HTTP server if still running
-    if [ -n "$HTTP_SERVER_PID" ]; then
-      kill -9 "$HTTP_SERVER_PID" 2>/dev/null || true
-    fi
+# Lockfile for preventing concurrent runs
+LOCKFILE="/var/lock/w2c-letsencrypt.lock"
 
-    # Restore original firewall states
-    if [ -n "$ORIGINAL_WEBACCESS_STATE" ] && [ "$ORIGINAL_WEBACCESS_STATE" = "false" ]; then
-      esxcli network firewall ruleset set -e false -r webAccess 2>/dev/null || true
-      log "Restored webAccess firewall rule to disabled"
-    fi
-
-    if [ -n "$ORIGINAL_VSPHERE_STATE" ] && [ "$ORIGINAL_VSPHERE_STATE" = "false" ]; then
-      esxcli network firewall ruleset set -e false -r vSphereClient 2>/dev/null || true
-      log "Restored vSphereClient firewall rule to disabled"
-    fi
-
-  elif [ "$CHALLENGE_TYPE" = "dns-01" ]; then
-    # Restore original httpClient state
-    if [ -n "$ORIGINAL_HTTPCLIENT_STATE" ] && [ "$ORIGINAL_HTTPCLIENT_STATE" = "false" ]; then
-      esxcli network firewall ruleset set -e false -r httpClient 2>/dev/null || true
-      log "Restored httpClient firewall rule to disabled"
-    fi
+# Create lockfile atomically using mkdir (POSIX; avoids TOCTOU race)
+LOCKDIR="${LOCKFILE}.lk"
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+  if [ -d "$LOCKDIR" ]; then
+    log "Another renewal is already in progress (lock: $LOCKDIR). Exiting."
+  else
+    log "Error: Failed to create lock directory: $LOCKDIR"
+    log "Possible causes: permission denied, read-only filesystem, or missing parent directory."
   fi
-}
-
-# Set trap to ensure cleanup on exit
-trap cleanup_firewall EXIT INT TERM
-
-log "Starting certificate renewal using $CHALLENGE_TYPE challenge.";
+  exit 1
+fi
+trap 'cleanup' EXIT HUP INT TERM
+log "Starting certificate renewal."
 
 # Preparation steps
 if [ -z "$DOMAIN" ] || [ "$DOMAIN" = "${DOMAIN/.}" ]; then
@@ -120,9 +88,12 @@ fi
 
 # Add a cronjob for auto renewal. The script is run once a week on Sunday at 00:00
 if ! grep -q "$LOCALDIR/$LOCALSCRIPT" /var/spool/cron/crontabs/root; then
-  kill -sighup "$(pidof crond)" 2>/dev/null
-  echo "0    0    *   *   0   /bin/sh $LOCALDIR/$LOCALSCRIPT" >> /var/spool/cron/crontabs/root
-  crond
+  crond_pid=$(pidof crond 2>/dev/null)
+  if [ -n "$crond_pid" ]; then
+    kill -sighup "$crond_pid" 2>/dev/null || true
+  fi
+  echo "0    0    *   *   0   /bin/sh $LOCALDIR/$LOCALSCRIPT >> $LOCALDIR/renew.log 2>&1" >> /var/spool/cron/crontabs/root
+  crond 2>/dev/null || true
 fi
 
 # Check issuer and expiration date of existing cert
@@ -137,7 +108,7 @@ if [ -e "$VMWARE_CRT" ]; then
     log "Existing Let's Encrypt cert valid until: ${CERT_VALID}"
     if openssl x509 -checkend $((RENEW_DAYS * 86400)) -noout -in "$VMWARE_CRT"; then
       log "=> Longer than ${RENEW_DAYS} days. Aborting."
-      exit
+      exit 0
     else
       log "=> Less than ${RENEW_DAYS} days. Renewing!"
     fi
@@ -147,6 +118,58 @@ if [ -e "$VMWARE_CRT" ]; then
 fi
 
 cd "$LOCALDIR" || exit
+
+# Detect if we're running in an automated context (cron, etc.)
+is_automated_run() {
+    if [ ! -t 0 ]; then return 0; fi
+    if [ -z "$TERM" ] || [ "$TERM" = "dumb" ]; then return 0; fi
+    if [ -n "$CRON" ]; then return 0; fi
+    if ps -o comm= -p $PPID 2>/dev/null | grep -q "crond"; then return 0; fi
+    return 1
+}
+
+# Cleanup function to restore firewall rules
+cleanup_firewall() {
+  if [ "$CHALLENGE_TYPE" = "http-01" ]; then
+    # Kill HTTP server if still running
+    if [ -n "$HTTP_SERVER_PID" ]; then
+      kill -9 "$HTTP_SERVER_PID" 2>/dev/null || true
+    fi
+    # Restore original firewall states
+    if [ -n "$ORIGINAL_WEBACCESS_STATE" ] && [ "$ORIGINAL_WEBACCESS_STATE" = "false" ]; then
+      esxcli network firewall ruleset set -e false -r webAccess 2>/dev/null || true
+      log "Restored webAccess firewall rule to disabled"
+    fi
+    if [ -n "$ORIGINAL_VSPHERE_STATE" ] && [ "$ORIGINAL_VSPHERE_STATE" = "false" ]; then
+      esxcli network firewall ruleset set -e false -r vSphereClient 2>/dev/null || true
+      log "Restored vSphereClient firewall rule to disabled"
+    fi
+  fi
+  # Both challenge types use httpClient for ACME communication
+  if [ -n "$ORIGINAL_HTTPCLIENT_STATE" ] && [ "$ORIGINAL_HTTPCLIENT_STATE" = "false" ]; then
+    esxcli network firewall ruleset set -e false -r httpClient 2>/dev/null || true
+    log "Restored httpClient firewall rule to disabled"
+  fi
+}
+
+cleanup() {
+  cleanup_firewall
+  if [ -d "$LOCKDIR" ]; then
+    rmdir "$LOCKDIR" 2>/dev/null || true
+  fi
+}
+
+trap cleanup EXIT HUP INT TERM
+
+# Helper to enable outbound ACME firewall rule and store state
+enable_httpclient_firewall() {
+  httpclient_enabled=$(esxcli network firewall ruleset list | grep "httpClient" | awk '{print $NF}')
+  ORIGINAL_HTTPCLIENT_STATE="$httpclient_enabled"
+  if [ "$httpclient_enabled" = "false" ]; then
+    esxcli network firewall ruleset set -e true -r httpClient
+    log "Enabled httpClient firewall rule for ACME communication"
+  fi
+}
 
 # Setup based on challenge type
 if [ "$CHALLENGE_TYPE" = "http-01" ]; then
@@ -160,127 +183,190 @@ if [ "$CHALLENGE_TYPE" = "http-01" ]; then
 
   # Firewall management for HTTP-01 (needs inbound access on port 80/443)
   log "Configuring firewall for HTTP-01 challenge..."
-
-  # Check current firewall state
   firewall_enabled=$(esxcli network firewall get | grep "Enabled:" | awk '{print $NF}')
   webaccess_enabled=$(esxcli network firewall ruleset list | grep "webAccess" | awk '{print $NF}')
   vsphere_enabled=$(esxcli network firewall ruleset list | grep "vSphereClient" | awk '{print $NF}')
-
   # Store original states for restoration
   ORIGINAL_FIREWALL_STATE="$firewall_enabled"
   ORIGINAL_WEBACCESS_STATE="$webaccess_enabled"
   ORIGINAL_VSPHERE_STATE="$vsphere_enabled"
-
   # Enable required rulesets for HTTP-01
   if [ "$webaccess_enabled" = "false" ]; then
     esxcli network firewall ruleset set -e true -r webAccess
     log "Enabled webAccess firewall rule for HTTP-01"
   fi
-
   if [ "$vsphere_enabled" = "false" ]; then
     esxcli network firewall ruleset set -e true -r vSphereClient
     log "Enabled vSphereClient firewall rule for HTTP-01"
   fi
-
-  # Enable outbound HTTP client for ACME communication
-  esxcli network firewall ruleset set -e true -r httpClient
-
-  # Start HTTP server on port 8120 for HTTP validation
-  python3 -m "http.server" 8120 &
+  # Enable outbound HTTP client for ACME communication (consolidated)
+  enable_httpclient_firewall
+  # Start HTTP server serving ONLY the acme-challenge subdirectory.
+  # Scoping to ACMEDIR prevents exposure of private keys and renew.cfg in LOCALDIR.
+  # exec inside the subshell ensures kill -9 hits the python process directly.
+  if which python3 >/dev/null 2>&1; then
+    ( cd "$ACMEDIR" && exec python3 -m http.server 8120 ) &
+  elif which python >/dev/null 2>&1; then
+    ( cd "$ACMEDIR" && exec python -m SimpleHTTPServer 8120 ) &
+  else
+    log "Error: No Python interpreter available for HTTP server"
+    exit 1
+  fi
   HTTP_SERVER_PID=$!
 
 elif [ "$CHALLENGE_TYPE" = "dns-01" ]; then
-  # Validate DNS provider configuration
+  # Validate DNS provider configuration for DNS-01 challenge
   if [ -z "$DNS_PROVIDER" ]; then
     log "Error: DNS_PROVIDER must be set for dns-01 challenge"
     exit 1
   fi
-
-  # Check for manual DNS provider - prevent automated renewal
+  # Prevent automated renewal with manual DNS provider
   if [ "$DNS_PROVIDER" = "manual" ]; then
     if is_automated_run; then
-      log "Manual DNS provider detected in automated context (likely cron job)."
-      log "Skipping renewal to prevent user interaction requirements."
-      log "Manual DNS certificates should be renewed manually by running:"
-      log "  $LOCALDIR/$LOCALSCRIPT"
-      log "Or change DNS_PROVIDER to an automated provider in renew.cfg"
+      log "Manual DNS provider detected in automated context. Skipping renewal."
+      log "Run manually: $LOCALDIR/$LOCALSCRIPT"
       exit 0
     else
       log "Manual DNS provider detected. This will require interactive input."
-      log "Press Ctrl+C now if you want to cancel and switch to an automated provider."
       sleep 3
     fi
   fi
-
-  # Check if DNS API script exists
+  # Ensure DNS API script is present and executable
   if [ ! -x "$LOCALDIR/dnsapi/dns_api.sh" ]; then
     log "Error: DNS API script not found or not executable: $LOCALDIR/dnsapi/dns_api.sh"
     exit 1
   fi
-
-  # Firewall management for DNS-01 (only needs outbound access)
+  # Only outbound firewall access is needed for DNS-01
   log "Configuring firewall for DNS-01 challenge..."
-
-  # Store current httpClient state for restoration
-  httpclient_enabled=$(esxcli network firewall ruleset list | grep "httpClient" | awk '{print $NF}')
-  ORIGINAL_HTTPCLIENT_STATE="$httpclient_enabled"
-
-  # Enable outbound HTTP client for ACME communication (if not already enabled)
-  if [ "$httpclient_enabled" = "false" ]; then
-    esxcli network firewall ruleset set -e true -r httpClient
-    log "Enabled httpClient firewall rule for DNS-01"
-  fi
-
+  enable_httpclient_firewall
   log "Using DNS provider: $DNS_PROVIDER"
 fi
 
-# Cert Request
-[ ! -r "$ACCOUNTKEY" ] && openssl genrsa 4096 > "$ACCOUNTKEY"
+# Generate required keys and CSR if they don't exist
+log "Checking for required keys and CSR..."
 
-openssl genrsa -out "$KEY" 4096
-openssl req -new -sha256 -key "$KEY" -subj "/CN=$DOMAIN" -config "./openssl.cnf" > "$CSR"
-chmod 0400 "$ACCOUNTKEY" "$KEY"
-
-# Retrieve the certificate
-export SSL_CERT_FILE
-export DNS_PROPAGATION_WAIT
-
-if [ "$CHALLENGE_TYPE" = "http-01" ]; then
-  CERT=$(python3 ./acme_tiny.py --account-key "$ACCOUNTKEY" --csr "$CSR" --acme-dir "$ACMEDIR" --directory-url "$DIRECTORY_URL" --challenge-type "$CHALLENGE_TYPE" 2>acme_error.log)
-elif [ "$CHALLENGE_TYPE" = "dns-01" ]; then
-  CERT=$(python3 ./acme_tiny.py --account-key "$ACCOUNTKEY" --csr "$CSR" --directory-url "$DIRECTORY_URL" --challenge-type "$CHALLENGE_TYPE" 2>acme_error.log)
+# Generate account key if it doesn't exist
+if [ ! -r "$ACCOUNTKEY" ]; then
+  # If the file (or a dangling symlink) already exists we cannot read it —
+  # abort instead of silently overwriting it.  The operator should inspect
+  # and remove it manually before re-running.
+  if [ -e "$ACCOUNTKEY" ] || [ -L "$ACCOUNTKEY" ]; then
+    log "Error: Account key exists but is not readable: $ACCOUNTKEY"
+    log "Check permissions or remove it manually to generate a new one."
+    exit 1
+  fi
+  log "Generating account key: $ACCOUNTKEY"
+  # Generate directly to the target path inside a restricted-umask subshell so
+  # the file is created with mode 0600 in a single openssl operation.  This
+  # eliminates the empty-file window that existed with the pre-create ':>' then
+  # '>>' append pattern when the process was interrupted between the two steps.
+  if ! ( umask 0177 && openssl genrsa -out "$ACCOUNTKEY" 4096 2>/dev/null ); then
+    log "Error: Failed to generate account key"
+    rm -f "$ACCOUNTKEY"
+    exit 1
+  fi
+  chmod 0400 "$ACCOUNTKEY"
+  log "Successfully generated account key"
 fi
 
+# Generate domain private key if it doesn't exist
+if [ ! -r "$KEY" ]; then
+  # Abort if the file exists but is unreadable rather than silently overwriting.
+  if [ -e "$KEY" ] || [ -L "$KEY" ]; then
+    log "Error: Domain key file exists but is not readable: $KEY"
+    log "Check permissions or remove it manually to generate a new one."
+    exit 1
+  fi
+  log "Generating domain private key: $KEY"
+  if ! ( umask 0177 && openssl genrsa -out "$KEY" 4096 2>/dev/null ); then
+    log "Error: Failed to generate domain private key"
+    rm -f "$KEY"
+    exit 1
+  fi
+  chmod 0400 "$KEY"
+  log "Successfully generated domain private key"
+fi
+
+# Generate Certificate Signing Request if it doesn't exist or if domain changed
+if [ ! -r "$CSR" ] || ! openssl req -in "$CSR" -noout -text 2>/dev/null | grep -q "CN.*$DOMAIN"; then
+  log "Generating Certificate Signing Request: $CSR"
+  # Use absolute path for config file and add SAN extension for modern compatibility
+  if [ -f "$LOCALDIR/openssl.cnf" ]; then
+    openssl req -new -sha256 -key "$KEY" -subj "/CN=$DOMAIN" -config "$LOCALDIR/openssl.cnf" -out "$CSR"
+  else
+    # Fallback: generate CSR without config file (simpler but should work)
+    log "Warning: openssl.cnf not found, generating basic CSR"
+    openssl req -new -sha256 -key "$KEY" -subj "/CN=$DOMAIN" -out "$CSR"
+  fi
+
+  # Verify CSR was created successfully
+  if [ ! -f "$CSR" ] || [ ! -s "$CSR" ]; then
+    log "Error: Failed to generate Certificate Signing Request"
+    exit 1
+  fi
+  log "Successfully generated CSR for domain: $DOMAIN"
+fi
+
+# Retrieve the certificate - check for python3 first, fallback to python
+export SSL_CERT_FILE
+if which python3 >/dev/null 2>&1; then
+  PYTHON_CMD="python3"
+elif which python >/dev/null 2>&1; then
+  PYTHON_CMD="python"
+else
+  log "Error: No Python interpreter available"
+  exit 1
+fi
+
+if [ "$CHALLENGE_TYPE" = "http-01" ]; then
+  # Pass account key only to this subprocess via env
+  CERT=$(env ACCOUNTKEY="$ACCOUNTKEY" \
+    "$PYTHON_CMD" ./acme_tiny.py --account-key "$ACCOUNTKEY" --csr "$CSR" --acme-dir "$ACMEDIR" --directory-url "$DIRECTORY_URL")
+  ACME_EXIT=$?
+elif [ "$CHALLENGE_TYPE" = "dns-01" ]; then
+  # Pass account key and DNS provider credentials only to this subprocess via env
+  CERT=$(env ACCOUNTKEY="$ACCOUNTKEY" CF_API_TOKEN="$CF_API_TOKEN" CF_API_KEY="$CF_API_KEY" CF_EMAIL="$CF_EMAIL" \
+    "$PYTHON_CMD" ./acme_tiny.py --account-key "$ACCOUNTKEY" --csr "$CSR" --acme-dir "$ACMEDIR" --directory-url "$DIRECTORY_URL" --challenge-type "$CHALLENGE_TYPE")
+  ACME_EXIT=$?
+else
+  log "Error: Invalid challenge type: $CHALLENGE_TYPE"
+  exit 1
+fi
+
+if [ $ACME_EXIT -ne 0 ]; then
+  log "Error: ACME certificate retrieval failed with exit code $ACME_EXIT"
+fi
+
+# Kill HTTP server if it was started for HTTP-01
+[ "$CHALLENGE_TYPE" = "http-01" ] && [ -n "$HTTP_SERVER_PID" ] && kill -9 "$HTTP_SERVER_PID"
+
 # If an error occurred during certificate issuance, $CERT will be empty
-if [ -n "$CERT" ] ; then
-  echo "$CERT" > "$CRT"
+if [ -n "$CERT" ]; then
+  echo "$CERT" > "$CRT" || { log "Error: Failed to write certificate to $CRT"; exit 1; }
   # Provide the certificate to ESXi
-  cp -p "$LOCALDIR/$KEY" "$VMWARE_KEY"
-  cp -p "$LOCALDIR/$CRT" "$VMWARE_CRT"
+   key_src="$KEY"
+   crt_src="$CRT"
+   case "$key_src" in /*) ;; *) key_src="$LOCALDIR/$key_src" ;; esac
+   case "$crt_src" in /*) ;; *) crt_src="$LOCALDIR/$crt_src" ;; esac
+   cp -p "$key_src" "$VMWARE_KEY" || { log "Error: Failed to copy private key to $VMWARE_KEY"; exit 1; }
+   cp -p "$crt_src" "$VMWARE_CRT" || { log "Error: Failed to install certificate to $VMWARE_CRT"; exit 1; }
   log "Success: Obtained and installed a certificate from Let's Encrypt."
-elif openssl x509 -checkend 86400 -noout -in "$VMWARE_CRT"; then
+elif openssl x509 -checkend 86400 -noout -in "$VMWARE_CRT" 2>/dev/null; then
   log "Warning: No cert obtained from Let's Encrypt. Keeping the existing one as it is still valid."
   if [ -s acme_error.log ]; then
     log "acme_tiny.py error output:"; cat acme_error.log | while read line; do log "$line"; done
   fi
 else
   log "Error: No cert obtained from Let's Encrypt. Generating a self-signed certificate."
-  if [ -s acme_error.log ]; then
-    log "acme_tiny.py error output:"; cat acme_error.log | while read line; do log "$line"; done
-  fi
-  /sbin/generate-certificates
+  /sbin/generate-certificates 2>/dev/null || { log "Error: Failed to generate self-signed certificate"; exit 1; }
 fi
 
-# Restart hostd and vpxa to ensure new cert is fully applied
-log "Restarting hostd and vpxa to reload certificates..."
-for svc in hostd vpxa; do
-    if /etc/init.d/$svc restart >/dev/null 2>&1; then
-        if [ "$DEBUG" = "1" ]; then
-            log "Successfully restarted $svc"
-        fi
-    else
-        log "Warning: Failed to restart $svc (non-critical)"
-    fi
+for s in /etc/init.d/*; do
+  # Skip our own script to avoid recursion
+  case "$(basename "$s")" in
+    w2c-letsencrypt) continue ;;
+  esac
+  if [ -x "$s" ] && grep -q "ssl_reset" "$s" 2>/dev/null; then
+    "$s" ssl_reset 2>/dev/null || true
+  fi
 done
-
-log "Service restart complete. hostd and vpxa restarted."
