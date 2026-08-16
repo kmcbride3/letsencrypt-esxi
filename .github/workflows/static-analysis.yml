@@ -1,0 +1,47 @@
+name: static-analysis
+
+on:
+  push:     # Triggers on any commit to any branch
+  pull_request: # Triggers on any pull request creation/update
+
+concurrency:
+  # Groups runs by workflow name and branch/PR context
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Instantly cancels any currently running job in this group when a new one starts
+  cancel-in-progress: true
+
+jobs:
+  static-analysis:
+    name: Analyze Code
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7.0.1
+
+    # Check 1: Python Syntax
+    - name: Python Syntax Check
+      run: |
+        python3 -m pip install flake8
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+
+    # Check 2: Python Security Vulnerabilities
+    - name: Python Security Scan (Bandit)
+      run: |
+        python3 -m pip install bandit
+        # Scans the current directory recursively, skipping tests and ignoring low-priority warnings
+        bandit -r . -ll -ii
+
+    # Check 3: Shell Script Formatting & Logic
+    - name: Shell Syntax Check
+      run: find . -name "*.sh" -exec shellcheck {} +
+
+    # Check 4: Deep Security Vulnerabilities
+    - name: Semgrep Bash Security Scan
+      run: |
+        python3 -m pip install semgrep
+          python3 -m pip install semgrep
+          # The --error flag forces the workflow to break if findings are discovered
+          semgrep scan --config="p/bash" --config="p/python" --config="p/github-actions" --error .

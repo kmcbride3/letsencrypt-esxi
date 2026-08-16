@@ -1,0 +1,117 @@
+name: build-and-release
+
+# Make repo-wide default permissions explicit and minimal
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - '*'
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+*'
+
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    # Run the entire job inside the native vibauthor container, bypassing build.sh
+    container:
+      image: lamw/vibauthor@sha256:4d5001c3847d6dd0afac734e5512f02afccd555474729555e069622eb004b11a
+
+    permissions:
+      contents: read
+
+    outputs:
+      vib_date: ${{ steps.run_build.outputs.vib_date }}
+      vib_tag: ${{ steps.run_build.outputs.vib_tag }}
+      vib_build: ${{ steps.run_build.outputs.vib_build }}
+      vib_name: ${{ steps.run_build.outputs.vib_name }}
+      vib_version: ${{ steps.run_build.outputs.vib_version }}
+      vib_output: ${{ steps.run_build.outputs.vib_output }}
+      offline_bundle_name: ${{ steps.run_build.outputs.offline_bundle_name }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set ENV variables
+        id: set_env
+        run: |
+          echo "repo_name=${GITHUB_REPOSITORY#$GITHUB_REPOSITORY_OWNER/}" >> $GITHUB_ENV
+          if [ "${{ github.ref_type }}" = "branch" ]; then
+            echo "vib_tag=${GITHUB_SHA:0:7}" >> $GITHUB_ENV
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "vib_tag=${{ github.ref_name }}" >> $GITHUB_ENV
+          else
+            echo "vib_tag=0.0.1" >> $GITHUB_ENV
+          fi
+
+      - name: Create VIB
+        id: run_build
+        env:
+          GH_REPO_NAME: ${{ steps.set_env.outputs.repo_name }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_REPO_OWNER: ${{ github.repository_owner }}
+          VIB_TAG: ${{ steps.set_env.outputs.vib_tag }}
+          COMMIT_DATE: ${{ github.event.head_commit.timestamp }}
+
+        run: /bin/sh ./build/create_vib.sh
+
+      - name: Store VIB
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: ${{ steps.run_build.outputs.vib_name }}-${{ steps.run_build.outputs.vib_version }}
+          path: |
+            build/${{ steps.run_build.outputs.vib_output }}
+            build/${{ steps.run_build.outputs.offline_bundle_name }}
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Retrieve build artifacts
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: ${{ needs.build.outputs.vib_name }}-${{ needs.build.outputs.vib_version }}
+          path: .
+
+      - name: Generate Cryptographic Checksums
+        run: |
+          sha256sum ${{ needs.build.outputs.vib_output }} ${{ needs.build.outputs.offline_bundle_name }} > checksums.txt
+
+      - name: Generate installation notes
+        run: |
+          cat > installation_notes.md << EOF
+          ## 📦 Installation
+
+          \`\`\`bash
+          wget -O /tmp/${{ needs.build.outputs.vib_output }} https://github.com/${{ github.repository }}/releases/download/${{ needs.build.outputs.vib_tag }}/${{ needs.build.outputs.vib_output }}
+          esxcli software vib install -v /tmp/${{ needs.build.outputs.vib_output }} -f --no-sig-check
+          \`\`\`
+
+          See the [README](https://github.com/${{ github.repository }}/blob/master/README.md) for configuration and usage instructions.
+          EOF
+
+      - name: Create release
+        id: create_release
+        uses: softprops/action-gh-release@v3.0.2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ needs.build.outputs.vib_tag }}
+          body_path: installation_notes.md
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            ${{ needs.build.outputs.vib_output }}
+            ${{ needs.build.outputs.offline_bundle_name }}
+            checksums.txt

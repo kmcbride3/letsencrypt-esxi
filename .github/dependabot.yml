@@ -1,0 +1,31 @@
+version: 2
+updates:
+  # 1. Automatically monitors your GitHub Actions versions
+  - package-ecosystem: "github-actions"
+    directory: "/" # Required mapping for workflow file tracking
+    schedule:
+      interval: "weekly"
+    groups:
+      action-updates:
+        patterns:
+          - "*"
+
+  # 2. Automatically monitors Python dependencies
+  - package-ecosystem: "pip"
+    directory: "/" # Looks for requirements.txt or pyproject.toml in the root
+    schedule:
+      interval: "weekly"
+    groups:
+      python-updates:
+        patterns:
+          - "*"
+
+  # 3. Automatically monitors Docker base images used in your workflows
+  - package-ecosystem: "docker"
+    directory: "/" # Scans for your workflows and Dockerfiles from the root down
+    schedule:
+      interval: "weekly"
+    groups:
+      docker-updates:
+        patterns:
+          - "*"

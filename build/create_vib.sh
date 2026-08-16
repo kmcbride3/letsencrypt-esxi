@@ -2,10 +2,10 @@
 #
 # Copyright (c) Johannes Feichtner <johannes@web-wack.at>
 #
-# Script to build letsencrypt-esxi VIB using VIB Author
+# Script to build VIB using VIB Author
 
 LOCALDIR=$(dirname "$(readlink -f "$0")")
-STAGING_DIR=/tmp/letsencrypt-esxi-$$
+STAGING_DIR=/tmp/${GH_REPO_NAME:-letsencrypt-esxi}-$$
 
 # Remove staging directory on exit, interrupt or termination
 cleanup() {
@@ -15,13 +15,13 @@ trap cleanup EXIT INT TERM
 
 # Ensure prerequisites are installed
 git version > /dev/null 2>&1
-if [ $? -ne 0 ]; then
+if [ $? -eq 1 ]; then
   echo "git not installed, exiting..."
   exit 1
 fi
 
 vibauthor --version > /dev/null 2>&1
-if [ $? -ne 0 ]; then
+if [ $? -eq 1 ]; then
   echo "vibauthor not installed, exiting .."
   exit 1
 fi
@@ -29,38 +29,39 @@ fi
 # Define VIB metadata
 cd "${LOCALDIR}" || exit
 
-VIB_DATE=$(date --date="$(git log -n1 --format="%cd" --date="iso")" '+%Y-%m-%dT%H:%M:%S')
-VIB_TAG=$(git describe --tags --abbrev=0 --match '[0-9]*.[0-9]*.[0-9]*' 2> /dev/null || git rev-parse --short HEAD 2> /dev/null || echo 0.0.1)
+VIB_DATE=${COMMIT_DATE:-"$(git log -n1 --format="%cd" --date="format:%Y-%m-%dT%H:%M:%S")"}
+VIB_TAG=${VIB_TAG:-"$(git describe --tags --abbrev=0 --match '[0-9]*.[0-9]*.[0-9]*' 2> /dev/null || echo 0.0.1)"}
 VIB_BUILD=$(date +%s | cut -c5-) # VIB_BUILD: 6-digit truncated Unix timestamp
 
 # Setting up VIB spec confs
-PACKAGE_NAME="w2c-letsencrypt"
-VIB_NAME="${PACKAGE_NAME}-esxi"
-VIB_SUMMARY="Let's Encrypt for ESXi"
+VIB_NAME=${GH_REPO_OWNER:-w2c}-${GH_REPO_NAME:-letsencrypt-esxi}
+PACKAGE_NAME=${VIB_NAME%-esxi}
 VIB_DESC="Let's Encrypt for ESXi"
 VENDOR="web-wack-creations"
-VIB_DESC_FILE="${STAGING_DIR}/descriptor.xml"
-VIB_VERSION="${VIB_TAG}-${VIB_BUILD}"
-VIB_OUTPUT="${VIB_NAME}-${VIB_VERSION}.vib"
-OFFLINE_BUNDLE_NAME="${VIB_NAME}-${VIB_VERSION}-offline-bundle.zip"
-PAYLOAD_ARCHIVE="${STAGING_DIR}/payload1"
-VIB_PAYLOAD_DIR="${STAGING_DIR}/payloads/payload1"
+VIB_DESC_FILE=${STAGING_DIR}/descriptor.xml
+VIB_VERSION=${VIB_TAG}-${VIB_BUILD}
+VIB_OUTPUT=${VIB_NAME}-${VIB_VERSION}.vib
+OFFLINE_BUNDLE_NAME=${VIB_NAME}-${VIB_VERSION}-offline-bundle.zip
+PAYLOAD_ARCHIVE=${STAGING_DIR}/payload1
+VIB_PAYLOAD_DIR=${STAGING_DIR}/payloads/payload1
 
 # Set GitHub Actions environment variables for build metadata
-echo "VIB_DATE=${VIB_DATE}" >> $GITHUB_ENV
-echo "VIB_TAG=${VIB_TAG}" >> $GITHUB_ENV
-echo "VIB_BUILD=${VIB_BUILD}" >> $GITHUB_ENV
-echo "VIB_NAME=${VIB_NAME}" >> $GITHUB_ENV
-echo "VIB_VERSION=${VIB_VERSION}" >> $GITHUB_ENV
-echo "VIB_OUTPUT=${VIB_OUTPUT}" >> $GITHUB_ENV
-echo "OFFLINE_BUNDLE_NAME=${OFFLINE_BUNDLE_NAME}" >> $GITHUB_ENV
+if [ -n "$GITHUB_OUTPUT" ]; then
+  echo "vib_date=${VIB_DATE}" >> "$GITHUB_OUTPUT"
+  echo "vib_tag=${VIB_TAG}" >> "$GITHUB_OUTPUT"
+  echo "vib_build=${VIB_BUILD}" >> "$GITHUB_OUTPUT"
+  echo "vib_name=${VIB_NAME}" >> "$GITHUB_OUTPUT"
+  echo "vib_version=${VIB_VERSION}" >> "$GITHUB_OUTPUT"
+  echo "vib_output=${VIB_OUTPUT}" >> "$GITHUB_OUTPUT"
+  echo "offline_bundle_name=${OFFLINE_BUNDLE_NAME}" >> "$GITHUB_OUTPUT"
+fi
 
 # Create VIB spec payload directory (and all parent directories)
 mkdir -p "${VIB_PAYLOAD_DIR}"
 
 # Create target directory
-BIN_DIR="${VIB_PAYLOAD_DIR}/opt/${PACKAGE_NAME}"
-INIT_DIR="${VIB_PAYLOAD_DIR}/etc/init.d"
+BIN_DIR=${VIB_PAYLOAD_DIR}/opt/${PACKAGE_NAME}
+INIT_DIR= ${VIB_PAYLOAD_DIR}/etc/init.d
 mkdir -p "${BIN_DIR}" "${INIT_DIR}" || {
   echo "Error: failed to create payload directories"
   exit 1
@@ -116,8 +117,8 @@ for dns_script in ${BIN_DIR}/dnsapi/dns_*.sh; do
     fi
 done
 
-if [ -f "${INIT_DIR}/w2c-letsencrypt" ]; then
-    sed -i 's/\r$//' "${INIT_DIR}/w2c-letsencrypt" 2>/dev/null || true
+if [ -f "${INIT_DIR}/${PACKAGE_NAME}" ]; then
+    sed -i 's/\r$//' "${INIT_DIR}/${PACKAGE_NAME}" 2>/dev/null || true
 fi
 
 # Ensure that shell scripts are executable
@@ -133,17 +134,17 @@ PAYLOAD_SHA256=$(sha256sum "${PAYLOAD_ARCHIVE}" | awk '{print $1}')
 PAYLOAD_SHA256_ZCAT=$(zcat "${PAYLOAD_ARCHIVE}" | sha256sum | awk '{print $1}')
 PAYLOAD_SHA1_ZCAT=$(zcat "${PAYLOAD_ARCHIVE}" | sha1sum | awk '{print $1}')
 
-cat > "${VIB_DESC_FILE}" << __W2C__
+cat > "${VIB_DESC_FILE}" << __${GH_REPO_OWNER:-W2C}__
 <vib version="5.0">
   <type>bootbank</type>
   <name>${VIB_NAME}</name>
   <version>${VIB_VERSION}</version>
   <vendor>${VENDOR}</vendor>
-  <summary>Let's Encrypt for ESXi</summary>
-  <description>Let's Encrypt for ESXi</description>
+  <summary>${VIB_DESC}</summary>
+  <description>${VIB_DESC}</description>
   <release-date>${VIB_DATE}</release-date>
   <urls>
-    <url key="letsencrypt-esxi">https://github.com/w2c/letsencrypt-esxi</url>
+    <url key="${GH_REPO_NAME:-letsencrypt-esxi}">https://github.com/${GH_REPOSITORY:-w2c/letsencrypt-esxi}</url>
   </urls>
   <relationships>
     <depends/>
@@ -173,9 +174,9 @@ ${PAYLOAD_FILES}
     </payload>
   </payloads>
 </vib>
-__W2C__
+__${GH_REPO_OWNER:-W2C}__
 
-# Create letsencrypt-esxi VIB
+# Create VIB
 touch "${STAGING_DIR}/sig.pkcs7"
 ar r "${VIB_OUTPUT}" "${VIB_DESC_FILE}" "${STAGING_DIR}/sig.pkcs7" "${PAYLOAD_ARCHIVE}"
 

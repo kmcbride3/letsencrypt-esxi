@@ -1,0 +1,36 @@
+name: "CodeQL Security Scan"
+
+on:
+  push:
+    branches: [ "master", "main" ]
+  pull_request:
+    branches: [ "master", "main" ]
+  schedule:
+    - cron: '0 3 * * 6'  # Automatically scans every Saturday at 3:00 AM UTC
+
+jobs:
+  analyze:
+    name: Analyze Code
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write # Required to post results to GitHub Security tab
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.1
+
+      # 1. Initialize CodeQL Tools using the updated v4 Engine
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: python, actions
+
+      # 2. Automatically trace code mapping dependencies
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v4
+
+      # 3. Compile the database and upload to the GitHub Security Dashboard
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4

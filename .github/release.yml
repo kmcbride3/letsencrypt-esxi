@@ -1,0 +1,28 @@
+changelog:
+  categories:
+    - title: "🚀 New Features"
+      labels:
+        - "enhancement"
+        - "feature"
+        - "feature-request"
+
+    - title: "🐛 Bug Fixes"
+      labels:
+        - "bug"
+        - "fix"
+        - "patch"
+
+    - title: "📦 Dependency Updates"
+      labels:
+        - "dependencies"
+
+    - title: "📝 Documentation Updates"
+      labels:
+        - "documentation"
+        - "docs"
+
+  exclude:
+    labels:
+      - "ignore-changelog"
+      - "duplicate"
+      - "wontfix"
