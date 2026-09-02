@@ -1,3 +1,5 @@
+#!/bin/sh
+#
 # DigitalOcean DNS API Provider
 # Requires: DO_API_TOKEN
 #
@@ -43,7 +45,7 @@ do_get_domain() {
     headers="$DO_AUTH_HEADER\nContent-Type: application/json"
     dns_log_debug "[DO] Looking up domain for base domain: $base_domain"
     domain_response=$(dns_http_get "$DO_API_BASE/domains/$base_domain" "$headers")
-    domain_name=$(echo "$domain_response" | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
+    domain_name="${domain_response#*\"name\":\"}"; domain_name="${domain_name%%\"*}"
     if [ -n "$domain_name" ]; then
         dns_log_debug "[DO] Found domain_name: $domain_name for $base_domain"
         echo "$domain_name"
@@ -52,10 +54,10 @@ do_get_domain() {
     # Try parent domains
     parent_domain="$base_domain"
     while [ "$(echo "$parent_domain" | awk -F'.' '{print NF}')" -gt 2 ]; do
-        parent_domain=$(echo "$parent_domain" | sed 's/^[^.]*\.//')
+        parent_domain="${parent_domain#*.}"
         dns_log_debug "[DO] Trying parent domain: $parent_domain"
         domain_response=$(dns_http_get "$DO_API_BASE/domains/$parent_domain" "$headers")
-        domain_name=$(echo "$domain_response" | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
+        domain_name="${domain_response#*\"name\":\"}"; domain_name="${domain_name%%\"*}"
         if [ -n "$domain_name" ]; then
             dns_log_debug "[DO] Found parent domain_name: $domain_name for $parent_domain"
             echo "$domain_name"
@@ -73,24 +75,36 @@ do_get_txt_record_id() {
     txt_value="$3"
     headers="$DO_AUTH_HEADER\nContent-Type: application/json"
     records_response=$(dns_http_get "$DO_API_BASE/domains/$domain_name/records?type=TXT&name=$record_name" "$headers")
-    i=0
     while :; do
-        record_id=$(echo "$records_response" | sed -n "s/.*'id':\([0-9]*\).*/\1/p" | sed -n "$((i+1))p")
-        record_data=$(echo "$records_response" | sed -n 's/.*"data":"\([^"]*\)".*/\1/p' | sed -n "$((i+1))p")
+        # 1. Loop exit condition: Exit when no more "'id':" patterns exist
+        if [ "${records_response}" = "${records_response#*\'id\':}" ]; then
+            break
+        fi
+
+        # 2. Extract the ID directly from the main variable
+        records_response="${records_response#*\'id\':}"
+        record_id="${records_response%%[^0-9]*}"
+
+        # 3. Extract the Data directly from the main variable
+        records_response="${records_response#*\"data\":\"}"
+        record_data="${records_response%%\"*}"
+
+        # 4. Safeguard break if a record ID couldn't be parsed
         if [ -z "$record_id" ]; then
             break
         fi
+
+        # 5. Check for our target match
         if [ "$record_data" = "$txt_value" ]; then
             dns_log_debug "[DO] Found matching TXT record id: $record_id"
             echo "$record_id"
             return 0
         fi
-        i=$((i + 1))
-        if [ $i -ge 20 ]; then
-            dns_log_warn "[DO] TXT record search exceeded 20 iterations, possible malformed API response."
-            break
-        fi
     done
+
+    # If the loop finishes naturally, it means we scanned everything but found no match
+    dns_log_warn "[DO] Traversed all available TXT records, but none matched '$txt_value'."
+
     return 1
 }
 
@@ -111,7 +125,7 @@ dns_digitalocean_add() {
     if [ "$domain" = "$domain_name" ]; then
         record_name="_acme-challenge"
     else
-        subdomain_part=$(echo "$domain" | sed "s/\.$domain_name$//" | sed "s/$domain_name$//")
+        subdomain_part="${domain%."$domain_name"}"; subdomain_part="${subdomain_part%"$domain_name"}"
         if [ -n "$subdomain_part" ]; then
             record_name="_acme-challenge.$subdomain_part"
         else
@@ -128,14 +142,14 @@ dns_digitalocean_add() {
     record_data="{\"type\":\"TXT\",\"name\":\"$record_name\",\"data\":\"$txt_value\",\"ttl\":$DO_TTL}"
     headers="$DO_AUTH_HEADER\nContent-Type: application/json"
     create_response=$(dns_http_post "$DO_API_BASE/domains/$domain_name/records" "$record_data" "$headers")
-    record_id=$(echo "$create_response" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+    record_id="${create_response#*\"id\":}"; record_id="${record_id%%[^0-9]*}"
     if [ -n "$record_id" ]; then
         dns_log_info "Created DigitalOcean TXT record: $record_id"
         echo "$record_id" > "/tmp/acme_do_record_${domain}.id"
         echo "$domain_name" > "/tmp/acme_do_domain_${domain}.name"
         return 0
     else
-        error_msg=$(echo "$create_response" | sed -n 's/.*"message":"\([^"]*\)".*/\1/p')
+        error_msg="${create_response#*\"message\":\"}"; error_msg="${error_msg%%\"*}"
         dns_log_error "Failed to create DigitalOcean TXT record: $error_msg"
         return 1
     fi
@@ -169,7 +183,7 @@ dns_digitalocean_rm() {
         if [ "$domain" = "$domain_name" ]; then
             record_name="_acme-challenge"
         else
-            subdomain_part=$(echo "$domain" | sed "s/\.$domain_name$//" | sed "s/$domain_name$//")
+            subdomain_part="${domain%."$domain_name"}"; subdomain_part="${subdomain_part%"$domain_name"}"
             if [ -n "$subdomain_part" ]; then
                 record_name="_acme-challenge.$subdomain_part"
             else
@@ -181,7 +195,7 @@ dns_digitalocean_rm() {
     if [ -n "$record_id" ]; then
         dns_log_debug "Deleting DigitalOcean record ID: $record_id"
         headers="$DO_AUTH_HEADER\nContent-Type: application/json"
-        delete_response=$(dns_http_delete "$DO_API_BASE/domains/$domain_name/records/$record_id" "$headers")
+        dns_http_delete "$DO_API_BASE/domains/$domain_name/records/$record_id" "$headers"
         dns_log_info "Deleted DigitalOcean TXT record"
     else
         dns_log_warn "No record ID found for cleanup (record may have already been deleted)"

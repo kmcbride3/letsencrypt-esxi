@@ -40,28 +40,30 @@ VIB_DESC="Let's Encrypt for ESXi"
 VENDOR="web-wack-creations"
 VIB_DESC_FILE=${STAGING_DIR}/descriptor.xml
 VIB_VERSION=${VIB_TAG}-${VIB_BUILD}
-VIB_OUTPUT=${VIB_NAME}-${VIB_VERSION}.vib
-OFFLINE_BUNDLE_NAME=${VIB_NAME}-${VIB_VERSION}-offline-bundle.zip
+VIB_OUTPUT=${VIB_NAME}.vib
+OFFLINE_BUNDLE_NAME=${VIB_NAME}-offline-bundle.zip
 PAYLOAD_ARCHIVE=${STAGING_DIR}/payload1
 VIB_PAYLOAD_DIR=${STAGING_DIR}/payloads/payload1
 
 # Set GitHub Actions environment variables for build metadata
 if [ -n "$GITHUB_OUTPUT" ]; then
-  echo "vib_date=${VIB_DATE}" >> "$GITHUB_OUTPUT"
-  echo "vib_tag=${VIB_TAG}" >> "$GITHUB_OUTPUT"
-  echo "vib_build=${VIB_BUILD}" >> "$GITHUB_OUTPUT"
-  echo "vib_name=${VIB_NAME}" >> "$GITHUB_OUTPUT"
-  echo "vib_version=${VIB_VERSION}" >> "$GITHUB_OUTPUT"
-  echo "vib_output=${VIB_OUTPUT}" >> "$GITHUB_OUTPUT"
-  echo "offline_bundle_name=${OFFLINE_BUNDLE_NAME}" >> "$GITHUB_OUTPUT"
+  {
+    echo "vib_date=${VIB_DATE}"
+    echo "vib_tag=${VIB_TAG}"
+    echo "vib_build=${VIB_BUILD}"
+    echo "vib_name=${VIB_NAME}"
+    echo "vib_version=${VIB_VERSION}"
+    echo "vib_output=${VIB_OUTPUT}"
+    echo "offline_bundle_name=${OFFLINE_BUNDLE_NAME}"
+  } >> "$GITHUB_OUTPUT"
 fi
 
 # Create VIB spec payload directory (and all parent directories)
 mkdir -p "${VIB_PAYLOAD_DIR}"
 
 # Create target directory
-BIN_DIR=${VIB_PAYLOAD_DIR}/opt/${PACKAGE_NAME}
-INIT_DIR= ${VIB_PAYLOAD_DIR}/etc/init.d
+BIN_DIR="${VIB_PAYLOAD_DIR}"/opt/${PACKAGE_NAME}
+INIT_DIR="${VIB_PAYLOAD_DIR}"/etc/init.d
 mkdir -p "${BIN_DIR}" "${INIT_DIR}" || {
   echo "Error: failed to create payload directories"
   exit 1
@@ -89,40 +91,31 @@ fi
 cp "../${PACKAGE_NAME}" "${INIT_DIR}/"
 
 # Ensure that config example is readable but not world-writable
-chmod 0644 "${BIN_DIR}/renew.cfg.example"
+chmod 0644 "${BIN_DIR}"/renew.cfg.example
 
 # Only copy renew.cfg.example, do NOT create renew.cfg in the payload
-rm -f ${BIN_DIR}/renew.cfg 2>/dev/null
+rm -f "${BIN_DIR}"/renew.cfg 2>/dev/null
 
 # Copy DNS API framework and providers
 if [ -d "../dnsapi" ]; then
-    mkdir -p ${BIN_DIR}/dnsapi
-    cp ../dnsapi/* ${BIN_DIR}/dnsapi/
+    mkdir -p "${BIN_DIR}"/dnsapi
+    cp ../dnsapi/* "${BIN_DIR}"/dnsapi/
 fi
 
-# Fix line endings for shell scripts (convert Windows CRLF to Unix LF)
-for script in renew.sh; do
-    if [ -f "${BIN_DIR}/${script}" ]; then
-        sed -i 's/\r$//' "${BIN_DIR}/${script}" 2>/dev/null || true
-    fi
-done
+# Fix line endings for all codebase text files in BIN_DIR, and make shell scripts executable
+find "${BIN_DIR}" -type f \( \
+    -name "*.sh" \
+    -o -name "*.py" \
+    -o -name "*.yml" \
+    -o -name "*.yaml" \
+    -o -name "*.md" \
+    -o -name "*.cfg.example" \
+\) \
+-exec sed -i 's/\r$//' {} + \
+-name "*.sh" -exec chmod +x {} + 2>/dev/null || true
 
-# Fix line endings for DNS API framework and providers
-if [ -f "${BIN_DIR}/dnsapi/dns_api.sh" ]; then
-    sed -i 's/\r$//' "${BIN_DIR}/dnsapi/dns_api.sh" 2>/dev/null || true
-fi
-for dns_script in ${BIN_DIR}/dnsapi/dns_*.sh; do
-    if [ -f "${dns_script}" ]; then
-        sed -i 's/\r$//' "${dns_script}" 2>/dev/null || true
-    fi
-done
-
-if [ -f "${INIT_DIR}/${PACKAGE_NAME}" ]; then
-    sed -i 's/\r$//' "${INIT_DIR}/${PACKAGE_NAME}" 2>/dev/null || true
-fi
-
-# Ensure that shell scripts are executable
-chmod +x "${INIT_DIR}/${PACKAGE_NAME}" "${BIN_DIR}/renew.sh" "${BIN_DIR}/dnsapi/dns_api.sh"
+# Ensure that primary  scripts is executable
+chmod +x "${INIT_DIR}"/w2c-letsencrypt
 
 # Create tgz with payload
 tar czf "${PAYLOAD_ARCHIVE}" -C "${VIB_PAYLOAD_DIR}" etc opt

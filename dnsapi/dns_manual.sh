@@ -1,3 +1,5 @@
+#!/bin/sh
+#
 # Manual DNS API Provider
 # For testing or when automatic DNS management is not available
 #

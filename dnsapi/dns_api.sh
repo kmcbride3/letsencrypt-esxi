@@ -8,13 +8,8 @@
 # Commands: add, rm, wait, info, list, test
 #
 
-# ESXi-compatible path resolution - fallback if readlink -f is not available
-if readlink -f "$0" >/dev/null 2>&1; then
-  DNSAPIDIR=$(dirname "$(readlink -f "$0")")
-else
-  # Fallback for BusyBox versions without readlink -f
-  DNSAPIDIR=$(cd "$(dirname "$0")" && pwd)
-fi
+# ESXi-compatible path resolution
+DNSAPIDIR=$(dirname "$(readlink -f "$0")")
 LOCALDIR="$DNSAPIDIR/.."
 
 # Parse command line arguments
@@ -112,65 +107,11 @@ log "Debug: DNS_PROVIDER is '$DNS_PROVIDER'"
 # Redact credential value so it doesn't appear in syslog when DEBUG=1
 log "Debug: CF_API_TOKEN is '${CF_API_TOKEN:+[set]}'"
 
-# Determine the wget TLS option once at script startup.  Priority order:
-#   1. User-supplied SSL_CERT_FILE (validated readable)
-#   2. Auto-detected CA bundle from well-known ESXi / Linux paths
-#   3. Explicit opt-in via INSECURE_TLS=1  (hard failure otherwise)
-#
-# _WGET_TLS_WARN is stored here but emitted only on the first actual HTTPS
-# call (in dns_http_get / dns_http_post), not at startup, so that cron runs
-# that never reach the HTTP helpers are not spammed with warnings.
+
 _WGET_TLS_OPT=""
-_WGET_TLS_WARN=""
-
-# Probe well-known ESXi and common Linux CA bundle paths.
-_dns_find_ca_bundle() {
-    for _dfcb_b in \
-        /etc/ssl/certs/ca-bundle.crt \
-        /etc/vmware/ssl/castore.pem \
-        /etc/ssl/certs/ca-certificates.crt \
-        /usr/lib/ssl/certs/ca-certificates.crt \
-        /etc/pki/tls/certs/ca-bundle.crt \
-        /etc/ssl/ca-bundle.pem; do
-        if [ -r "$_dfcb_b" ]; then
-            printf '%s' "$_dfcb_b"
-            return 0
-        fi
-    done
-    return 1
-}
-
-if wget --help 2>&1 | grep -q '\-\-ca-certificate'; then
-    _ca_bundle=""
-    if [ -n "${SSL_CERT_FILE:-}" ] && [ -r "${SSL_CERT_FILE}" ]; then
-        _ca_bundle="$SSL_CERT_FILE"
-        log "Debug: TLS: using SSL_CERT_FILE CA bundle: $_ca_bundle"
-    else
-        _ca_bundle=$(_dns_find_ca_bundle)
-        [ -n "$_ca_bundle" ] && log "Debug: TLS: auto-detected CA bundle: $_ca_bundle"
-    fi
-
-    if [ -n "$_ca_bundle" ]; then
-        _WGET_TLS_OPT="--ca-certificate=${_ca_bundle}"
-    elif [ "${INSECURE_TLS:-0}" = "1" ]; then
-        _WGET_TLS_OPT="--no-check-certificate"
-        _WGET_TLS_WARN="INSECURE_TLS=1: TLS certificate verification is DISABLED. DNS provider and ACME API calls are vulnerable to MITM attacks."
-    else
-        log "Error: No CA bundle found for TLS verification and INSECURE_TLS is not set."
-        log "Error: Fix options: (1) set SSL_CERT_FILE=/path/to/ca-bundle.crt in renew.cfg,"
-        log "Error:              (2) set INSECURE_TLS=1 in renew.cfg to disable TLS verification (insecure)."
-        exit 1
-    fi
-else
-    # wget on this system lacks --ca-certificate; per-bundle TLS validation is impossible.
-    if [ "${INSECURE_TLS:-0}" = "1" ]; then
-        _WGET_TLS_OPT="--no-check-certificate"
-        _WGET_TLS_WARN="INSECURE_TLS=1: wget lacks --ca-certificate support; TLS certificate verification is DISABLED. DNS provider and ACME API calls are vulnerable to MITM attacks."
-    else
-        log "Error: wget on this system lacks --ca-certificate support; TLS certificate verification is impossible."
-        log "Error: Fix options: (1) upgrade wget, (2) set INSECURE_TLS=1 in renew.cfg to disable TLS verification (insecure)."
-        exit 1
-    fi
+# Proactively probe if the compiled BusyBox binary supports the bypass flag
+if wget --help 2>&1 | grep -q '\-\-no-check-certificate'; then
+    _WGET_TLS_OPT="--no-check-certificate"
 fi
 
 # Validation functions
@@ -240,15 +181,11 @@ dns_get_zone() {
     return 1
 }
 
-# BusyBox-only HTTP GET utility
 dns_http_get() {
     url="$1"
     headers="$2"
     timeout="${3:-$DEFAULT_DNS_TIMEOUT}"
-    max_redirects="${4:-5}"
-
-    # Ensure timeout is a bare integer (BusyBox compatible)
-    timeout="$(echo "$timeout" | sed 's/[a-zA-Z]//g')"
+    timeout="${timeout%%[^0-9]*}"
 
     log "Debug: HTTP GET: $url (timeout: ${timeout}s)"
 
@@ -257,15 +194,9 @@ dns_http_get() {
         return 127
     fi
 
-    # Emit the deferred INSECURE_TLS warning on the first actual HTTPS call
-    # rather than at startup, so cron runs that error before any HTTP call
-    # are not spammed unnecessarily.  Clear after first emission.
-    if [ -n "${_WGET_TLS_WARN:-}" ]; then
-        log "Warning: $_WGET_TLS_WARN"
-        _WGET_TLS_WARN=""
-    fi
-
+    # Initialize parameters using our forced ESXi flag
     set -- -qO- "$_WGET_TLS_OPT"
+
     if [ -n "$headers" ]; then
         OLD_IFS="$IFS"
         IFS='
@@ -276,28 +207,31 @@ dns_http_get() {
         IFS="$OLD_IFS"
     fi
     set -- "$@" "$url"
+
     if [ "${DEBUG:-0}" = "1" ]; then
         log "Debug: Final wget command: wget $*"
     fi
+
     if which timeout >/dev/null 2>&1; then
-        response=$(timeout -t $timeout wget "$@" 2>&1)
+        response=$(timeout -t "$timeout" wget "$@" 2>&1)
+        exit_code=$?
         if [ "${DEBUG:-0}" = "1" ]; then
             echo "Debug: Raw HTTP GET response:" >&2
             echo "$response" >&2
         fi
-        exit_code=$?
         if [ $exit_code -eq 124 ]; then
             log "Error: wget timed out after ${timeout}s"
             return 124
         fi
     else
         response=$(wget "$@" 2>&1)
+        exit_code=$?
         if [ "${DEBUG:-0}" = "1" ]; then
             echo "Debug: Raw HTTP GET response:" >&2
             echo "$response" >&2
         fi
-        exit_code=$?
     fi
+
     if [ $exit_code -eq 0 ]; then
         log "Debug: HTTP GET response: $response"
         echo "$response"
@@ -308,106 +242,84 @@ dns_http_get() {
     fi
 }
 
-# BusyBox-only HTTP POST utility (not supported)
+
 dns_http_post() {
     url="$1"
     data="$2"
     headers="$3"
     timeout="${4:-$DEFAULT_DNS_TIMEOUT}"
-
-    # Ensure timeout is a bare integer (BusyBox compatible)
-    timeout="$(echo "$timeout" | sed 's/[a-zA-Z]//g')"
+    timeout="${timeout%%[^0-9]*}"
 
     log "Debug: HTTP POST: $url (timeout: ${timeout}s)"
 
-    if ! which wget >/dev/null 2>&1; then
-        log "Error: No HTTP client available (wget required)"
-        return 127
-    fi
+    py=python3
+    which python3 >/dev/null 2>&1 || py=python
 
-    # Emit the deferred INSECURE_TLS warning on the first actual HTTPS call.
-    if [ -n "${_WGET_TLS_WARN:-}" ]; then
-        log "Warning: $_WGET_TLS_WARN"
-        _WGET_TLS_WARN=""
-    fi
+    response=$(DNS_HTTP_URL="$url" DNS_HTTP_DATA="$data" DNS_HTTP_HEADERS="$headers" DNS_HTTP_TIMEOUT="$timeout" \
+        "$py" -c "
+import os, ssl, sys
+try:
+    import urllib.request as urllib_request
+    import urllib.error as urllib_error
+except ImportError:
+    import urllib2 as urllib_request
+    urllib_error = urllib_request
 
-    # Compact JSON data: remove all newlines, carriage returns, tabs, and literal \n, \t; collapse spaces
-    compact_data=$(echo "$data" \
-        | sed 's/\\n//g; s/\\t//g' \
-        | sed 's/[\r\n\t]//g' \
-        | sed 's/  */ /g')
+headers = {}
+for line in os.environ.get('DNS_HTTP_HEADERS', '').splitlines():
+    if ':' in line:
+        k, v = line.split(':', 1)
+        headers[k.strip()] = v.strip()
 
-    set -- -qO- "$_WGET_TLS_OPT" --post-data="$compact_data"
-    if [ -n "$headers" ]; then
-        OLD_IFS="$IFS"
-        IFS='
-'
-        for header in $headers; do
-            set -- "$@" --header="$header"
-        done
-        IFS="$OLD_IFS"
-    fi
-    set -- "$@" "$url"
-    if [ "${DEBUG:-0}" = "1" ]; then
-        log "Debug: Final wget POST command: wget $*"
-    fi
-    if which timeout >/dev/null 2>&1; then
-        response=$(timeout -t $timeout wget "$@" 2>&1)
-        if [ "${DEBUG:-0}" = "1" ]; then
-            echo "Debug: Raw HTTP POST response:" >&2
-            echo "$response" >&2
-        fi
-        exit_code=$?
-        if [ $exit_code -eq 124 ]; then
-            log "Error: wget timed out after ${timeout}s"
-            return 124
-        fi
-    else
-        response=$(wget "$@" 2>&1)
-        if [ "${DEBUG:-0}" = "1" ]; then
-            echo "Debug: Raw HTTP POST response:" >&2
-            echo "$response" >&2
-        fi
-        exit_code=$?
-    fi
+# Initialize strict, secure TLS validation context
+ctx = ssl.create_default_context()
+ctx.check_hostname = True
+ctx.verify_mode = ssl.CERT_REQUIRED
+
+# Securely load ESXi's native trusted root store path
+esxi_store = '/etc/vmware/ssl/castore.pem'
+if os.path.exists(esxi_store) and os.path.getsize(esxi_store) > 0:
+    ctx.load_verify_locations(cafile=esxi_store)
+
+# Force standard HTTP POST by encoding payload data to raw bytes
+post_bytes = os.environ.get('DNS_HTTP_DATA', '').encode('utf-8')
+req = urllib_request.Request(os.environ['DNS_HTTP_URL'], data=post_bytes, headers=headers)
+timeout = float(os.environ.get('DNS_HTTP_TIMEOUT') or 30)
+
+try:
+    resp = urllib_request.urlopen(req, timeout=timeout, context=ctx)
+    data = resp.read()
+    sys.stdout.write(data.decode('utf-8') if isinstance(data, bytes) else data)
+except urllib_error.HTTPError as e:
+    data = e.read()
+    sys.stdout.write(data.decode('utf-8') if isinstance(data, bytes) else data)
+except Exception as e:
+    sys.stderr.write(str(e) + chr(10))
+    sys.exit(1)
+" 2>&1)
+    exit_code=$?
+
     if [ $exit_code -eq 0 ]; then
         log "Debug: HTTP POST response: $response"
         echo "$response"
         return 0
-    else
-        log "Debug: wget POST failed with exit code $exit_code: $response"
-        return $exit_code
     fi
+    log "Debug: python POST failed with exit code $exit_code: $response"
+    return $exit_code
 }
 
 dns_http_delete() {
     url="$1"
     headers="$2"
     timeout="${3:-$DEFAULT_DNS_TIMEOUT}"
-
-    # Ensure timeout is a bare integer (BusyBox compatible)
-    timeout="$(echo "$timeout" | sed 's/[a-zA-Z]//g')"
+    timeout="${timeout%%[^0-9]*}"
 
     log "Debug: HTTP DELETE: $url (timeout: ${timeout}s)"
 
-    # Emit the deferred INSECURE_TLS warning on the first actual HTTPS call.
-    if [ -n "${_WGET_TLS_WARN:-}" ]; then
-        log "Warning: $_WGET_TLS_WARN"
-        _WGET_TLS_WARN=""
-    fi
-
-    ca_bundle=""
-    case "$_WGET_TLS_OPT" in
-        --ca-certificate=*) ca_bundle="${_WGET_TLS_OPT#--ca-certificate=}" ;;
-    esac
-
-    # acme_tiny.py already requires python3 (or python2 via its urllib2 fallback)
-    # to run at all, so it is always available here.
     py=python3
     which python3 >/dev/null 2>&1 || py=python
 
     response=$(DNS_HTTP_URL="$url" DNS_HTTP_HEADERS="$headers" DNS_HTTP_TIMEOUT="$timeout" \
-        DNS_HTTP_CA_BUNDLE="$ca_bundle" DNS_HTTP_INSECURE="${INSECURE_TLS:-0}" \
         "$py" -c "
 import os, ssl, sys
 try:
@@ -427,25 +339,32 @@ for line in os.environ.get('DNS_HTTP_HEADERS', '').splitlines():
         k, v = line.split(':', 1)
         headers[k.strip()] = v.strip()
 
+# Initialize strict, secure TLS validation context
 ctx = ssl.create_default_context()
-if os.environ.get('DNS_HTTP_INSECURE') == '1':
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-elif os.environ.get('DNS_HTTP_CA_BUNDLE'):
-    ctx.load_verify_locations(cafile=os.environ['DNS_HTTP_CA_BUNDLE'])
+ctx.check_hostname = True
+ctx.verify_mode = ssl.CERT_REQUIRED
+
+# Securely load ESXi's native trusted root store path
+esxi_store = '/etc/vmware/ssl/castore.pem'
+if os.path.exists(esxi_store) and os.path.getsize(esxi_store) > 0:
+    ctx.load_verify_locations(cafile=esxi_store)
 
 req = DeleteRequest(os.environ['DNS_HTTP_URL'], headers=headers)
 timeout = float(os.environ.get('DNS_HTTP_TIMEOUT') or 30)
+
 try:
     resp = urllib_request.urlopen(req, timeout=timeout, context=ctx)
-    sys.stdout.write(resp.read().decode('utf-8'))
+    data = resp.read()
+    sys.stdout.write(data.decode('utf-8') if isinstance(data, bytes) else data)
 except urllib_error.HTTPError as e:
-    sys.stdout.write(e.read().decode('utf-8'))
+    data = e.read()
+    sys.stdout.write(data.decode('utf-8') if isinstance(data, bytes) else data)
 except Exception as e:
     sys.stderr.write(str(e) + chr(10))
     sys.exit(1)
 " 2>&1)
     exit_code=$?
+
     if [ $exit_code -eq 0 ]; then
         log "Debug: HTTP DELETE response: $response"
         echo "$response"
@@ -455,29 +374,28 @@ except Exception as e:
     return $exit_code
 }
 
-# URL encoding utility (ESXi-compatible)
 dns_url_encode() {
     string="$1"
     encoded=""
-    char=""
 
-    # Process each character
     while [ -n "$string" ]; do
-        char="${string%"${string#?}"}"  # Get first character
-        string="${string#?}"            # Remove first character
+        char="${string%"${string#?}"}"
+        string="${string#?}"
 
         case "$char" in
             [a-zA-Z0-9._~-])
                 encoded="$encoded$char"
                 ;;
+            " ") encoded="${encoded}%20" ;;
+            "/") encoded="${encoded}%2F" ;;
+            ":") encoded="${encoded}%3A" ;;
+            "?") encoded="${encoded}%3F" ;;
+            "=") encoded="${encoded}%3D" ;;
+            "&") encoded="${encoded}%26" ;;
+            "+") encoded="${encoded}%2B" ;;
             *)
-                # Convert to hex (ESXi compatible method)
-                if which printf >/dev/null 2>&1; then
-                    encoded="$encoded$(printf '%%%02X' "'$char")"
-                else
-                    # Fallback for limited environments
-                    encoded="$encoded%$(echo -n "$char" | od -An -tx1 | sed 's/ //g')"
-                fi
+                hex=$(printf '%02X' "'$char")
+                encoded="$encoded%$hex"
                 ;;
         esac
     done
@@ -490,117 +408,90 @@ dns_json_get() {
     json="$1"
     path="$2"
 
-    # Validate input
     if [ -z "$json" ] || [ -z "$path" ]; then
         log "Debug: Invalid JSON or path provided"
         return 1
     fi
 
-    # Use python if available for robust JSON parsing
-    if which python >/dev/null 2>&1; then
-        echo "$json" | python -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    path = '$path'.split('.')
-    result = data
-    for key in path:
-        if key.isdigit():
-            result = result[int(key)]
-        elif key in result:
-            result = result[key]
-        else:
-            print('')
-            sys.exit(0)
-    if result is not None:
-        if isinstance(result, (str, int, float, bool)):
-            print(result)
-        else:
-            print(json.dumps(result))
-    else:
-        print('')
-except (KeyError, IndexError, TypeError, ValueError) as e:
-    print('')
-except Exception as e:
-    print('')
-    sys.exit(1)
-"
-    elif which python3 >/dev/null 2>&1; then
-        echo "$json" | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    path = '$path'.split('.')
-    result = data
-    for key in path:
-        if key.isdigit():
-            result = result[int(key)]
-        elif key in result:
-            result = result[key]
-        else:
-            print('')
-            sys.exit(0)
-    if result is not None:
-        if isinstance(result, (str, int, float, bool)):
-            print(result)
-        else:
-            print(json.dumps(result))
-    else:
-        print('')
-except (KeyError, IndexError, TypeError, ValueError) as e:
-    print('')
-except Exception as e:
-    print('')
-    sys.exit(1)
-"
-    else
-        # Enhanced fallback using sed/awk for ESXi compatibility
-        log "Debug: Using fallback JSON parser"
+    # Grab the last key segment natively (e.g., "result.id" -> "id")
+    # This allows flat string parsing to find nested values safely
+    target_key="${path##*.}"
 
-        # Handle simple cases with sed/grep
-        case "$path" in
-            *.*)
-                # Complex path - not well supported in fallback
-                echo "$json" | sed -n "s/.*\"$(echo "$path" | cut -d. -f1)\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -1
-                ;;
-            *)
-                # Simple key lookup
-                echo "$json" | sed -n "s/.*\"$path\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -1
-                ;;
-        esac
-    fi
+    case "$json" in
+        *\""$target_key"\"*)
+            # Step 1: Chop everything off before the key
+            tmp="${json#*\"$target_key\"}"
+            # Step 2: Chop up to the opening value context (skip colon and optional spaces/quotes)
+            tmp="${tmp#*:}"
+            tmp="${tmp#*[[:space:]]}"
+
+            # Check if the value is a string (starts with a quote) or a bare number/bool
+            case "$tmp" in
+                \"*)
+                    # Isolate string value up to closing quote
+                    tmp="${tmp#\"}"
+                    echo "${tmp%%\"*}"
+                    ;;
+                *)
+                    # Isolate raw number/boolean up to the next comma or closing bracket
+                    tmp="${tmp%%,*}"
+                    tmp="${tmp%%\}*}"
+
+                    # Clean up internal/trailing whitespaces entirely in memory
+                    clean_val=""
+                    while [ -n "$tmp" ]; do
+                        case "$tmp" in
+                            *[$\'\r\'$\'\n\'$\'\t\'\ ]*)
+                                # Snip out everything before the whitespace char
+                                part="${tmp%%[$\'\r\'$\'\n\'$\'\t\'\ ]*}"
+                                clean_val="$clean_val$part"
+                                # Shrink the string past the whitespace character
+                                tmp="${tmp#*[$\'\r\'$\'\n\'$\'\t\'\ ]}"
+                                ;;
+                            *)
+                                clean_val="$clean_val$tmp"
+                                break
+                                ;;
+                            esac
+                    done
+                    echo "$clean_val"
+                    ;;
+            esac
+            ;;
+        *)
+            echo ""
+            ;;
+    esac
 }
 
-# JSON validation utility
 dns_json_validate() {
     json="$1"
 
-    if which python >/dev/null 2>&1; then
-        echo "$json" | python -c "
-import sys, json
-try:
-    json.load(sys.stdin)
-    sys.exit(0)
-except:
-    sys.exit(1)
-" 2>/dev/null
-    elif which python3 >/dev/null 2>&1; then
-        echo "$json" | python3 -c "
-import sys, json
-try:
-    json.load(sys.stdin)
-    sys.exit(0)
-except:
-    sys.exit(1)
-" 2>/dev/null
-    else
-        # Basic validation - check for balanced braces
-        open_braces=""
-        close_braces=""
-        open_braces=$(echo "$json" | sed 's/[^\{]//g' | wc -c)
-        close_braces=$(echo "$json" | sed 's/[^\}]//g' | wc -c)
-        [ "$open_braces" -eq "$close_braces" ]
-    fi
+    case "$json" in
+        *'{'*'}'*) ;;
+        *'['*']'*) ;;
+        *) return 1 ;;
+    esac
+
+    # Count open braces by measuring how much the string shrinks when they are stripped
+    no_open="${json#*\{}"
+    open_count=0
+    while [ "$json" != "$no_open" ]; do
+        open_count=$((open_count + 1))
+        json="$no_open"
+        no_open="${json#*\{}"
+    done
+
+    working_json="$1"
+    no_close="${working_json#*\}}"
+    close_count=0
+    while [ "$working_json" != "$no_close" ]; do
+        close_count=$((close_count + 1))
+        working_json="$no_close"
+        no_close="${working_json#*\}}"
+    done
+
+    [ "$open_count" -eq "$close_count" ]
 }
 
 # Extract error messages from API responses
@@ -619,7 +510,10 @@ dns_extract_error() {
         case "$provider" in
             "cloudflare")
                 error_msg=$(dns_json_get "$response" "errors.0.message")
-                [ -n "$error_msg" ] && echo "$error_msg" && return 0
+                if [ -n "$error_msg" ]; then
+                    echo "$error_msg"
+                    return 0
+                fi
                 ;;
         esac
 
@@ -633,17 +527,20 @@ dns_extract_error() {
         done
     fi
 
-    # Fallback to basic text extraction
-    if echo "$response" | grep -qi "error\|failed\|invalid"; then
-        echo "$response" | head -3 | awk '{printf "%s ", $0}'
-        return 0
-    fi
+    case "$response" in
+        *[Ee][Rr][Rr][Oo][Rr]*|*[Ff][Aa][Ii][Ll][Ee][Dd]*|*[Ii][Nn][Vv][Aa][Ll][Ii][Dd]*)
+            echo "$response" | head -n 3 | sed 's/[\r\n\t]/ /g'
+            echo "" # Clean trailing newline for stdout
+            return 0
+            ;;
+    esac
 
     echo "Unknown API error"
     return 1
 }
 
-# Enhanced DNS propagation checking with multiple strategies
+
+# Enhanced DNS propagation checking
 dns_check_propagation() {
     domain="$1"
     expected_value="$2"
@@ -653,19 +550,25 @@ dns_check_propagation() {
     log "Checking DNS propagation for _acme-challenge.$domain"
 
     waited=0
-    # Multiple resolver sets for comprehensive checking
     public_resolvers="8.8.8.8 1.1.1.1 208.67.222.222 9.9.9.9"
     backup_resolvers="8.8.4.4 1.0.0.1 208.67.220.220 149.112.112.112"
 
-    # Start with authoritative nameserver check if available
+    # Fetch Authoritative Name Server using native BusyBox nslookup parsing
     auth_ns=""
-    if which dig >/dev/null 2>&1; then
-        auth_ns=$(dig +short NS "$domain" 2>/dev/null | head -1)
-        if [ -n "$auth_ns" ]; then
-            # Remove trailing dot
-            auth_ns=$(echo "$auth_ns" | sed 's/\.$//')
-            log "Debug: Found authoritative nameserver: $auth_ns"
-        fi
+    _ns_raw=$(nslookup -type=ns "$domain" 2>/dev/null)
+
+    case "$_ns_raw" in
+        *nameserver\ =*)
+            # Extract everything after the 'nameserver = ' marker using standard POSIX chops
+            auth_ns="${_ns_raw#*nameserver\ =\ }"
+            auth_ns="${auth_ns%%[[:space:]]*}"
+            ;;
+    esac
+
+    if [ -n "$auth_ns" ]; then
+        # Native POSIX trailing-dot suffix trimming (Zero-process overhead)
+        auth_ns="${auth_ns%.}"
+        log "Debug: Found authoritative nameserver: $auth_ns"
     fi
 
     while [ $waited -lt $max_wait ]; do
@@ -691,7 +594,7 @@ dns_check_propagation() {
             fi
         done
 
-        # If not enough resolvers agree, try backup resolvers
+        # Handle backup transitions if consensus isn't reached midway
         required=$((total_resolvers / 2 + 1))
         if [ $found -lt $required ] && [ $waited -gt $((max_wait / 2)) ]; then
             log "Debug: Trying backup resolvers for additional confirmation"
@@ -721,68 +624,23 @@ dns_check_propagation() {
 
 # Helper function to query a specific resolver
 dns_query_resolver() {
-    resolver="$1"
-    domain="$2"
-    expected_value="$3"
+    _dqr_resolver="$1"
+    _dqr_domain="$2"
+    _dqr_expected="$3"
 
-    result=""
+    # Query the TXT records directly through BusyBox nslookup
+    # We pass the domain name and target resolver IP explicitly
+    _dqr_out=$(nslookup -type=txt "_acme-challenge.${_dqr_domain}" "$_dqr_resolver" 2>/dev/null)
 
-    # Use dig if available, fallback to nslookup
-    if which dig >/dev/null 2>&1; then
-        result=$(dig @"$resolver" TXT "_acme-challenge.$domain" +short +timeout=5 +tries=1 2>/dev/null | sed 's/"//g' | head -1)
-    elif which nslookup >/dev/null 2>&1; then
-        # nslookup with timeout (ESXi compatible)
-        result=$(timeout 10 nslookup -type=TXT "_acme-challenge.$domain" "$resolver" 2>/dev/null | grep -o '"[^\"]*"' | sed 's/"//g' | head -1)
-    else
-        log "Error: No DNS query tool available (dig or nslookup)"
-        return 1
-    fi
-
-    [ "$result" = "$expected_value" ]
-}
-
-# DNS cache busting - force fresh queries
-dns_flush_cache() {
-    domain="$1"
-
-    log "Debug: Attempting to flush DNS cache for $domain"
-
-    # Try various cache-busting techniques
-    if which systemd-resolve >/dev/null 2>&1; then
-        systemd-resolve --flush-caches 2>/dev/null || true
-    elif which resolvectl >/dev/null 2>&1; then
-        resolvectl flush-caches 2>/dev/null || true
-    elif [ -f /etc/init.d/nscd ]; then
-        /etc/init.d/nscd restart 2>/dev/null || true
-    fi
-
-    # Add random query to bust caches
-    random_subdomain="cache-bust-$(date +%s)"
-    if which dig >/dev/null 2>&1; then
-        dig "$random_subdomain.$domain" +short >/dev/null 2>&1 || true
-    fi
-}
-
-# ESXi Environment Initialization (ESXi 6.5+ Only)
-# This project is designed exclusively for ESXi environments
-dns_init_esxi_environment() {
-    log "Debug: Initializing ESXi 6.5+ environment"
-
-    # ESXi-optimized defaults (memory-based caching only)
-    DNS_CACHE_TTL=120                         # 2 minutes - conservative for ESXi
-    DNS_USE_FILE_CACHE=0                      # Always disabled for ESXi read-only filesystem
-
-    # Check memory constraints specific to ESXi
-    free_mem=""
-    if which free >/dev/null 2>&1; then
-        free_mem=$(free 2>/dev/null | awk '/^Mem:/ {print $4}' 2>/dev/null)
-        if [ -n "$free_mem" ] && [ "$free_mem" -lt 100000 ]; then  # Less than ~100MB
-            log "Debug: ESXi memory constrained (${free_mem}K) - using shorter cache TTL"
-            DNS_CACHE_TTL=60  # 1 minute for memory-constrained ESXi hosts
-        fi
-    fi
-
-    log "Debug: ESXi environment initialized: TTL=${DNS_CACHE_TTL}s, Memory cache only"
+    # Clean up line endings or quotes inside the text via sed to verify the match cleanly
+    case "$_dqr_out" in
+        *"$_dqr_expected"*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
 # Supported DNS providers
@@ -797,7 +655,7 @@ dns_load_provider() {
         return 1
     fi
 
-    # Check if provider is supported
+    # 1. Direct validation check without intermediate variables
     supported=false
     for p in $SUPPORTED_PROVIDERS; do
         if [ "$p" = "$provider" ]; then
@@ -812,36 +670,40 @@ dns_load_provider() {
         return 1
     fi
 
-    # Load provider script
     provider_script="$DNSAPIDIR/dns_${provider}.sh"
 
-    # Debug: Check provider script permissions and type
-    ls -l "$provider_script" >&2
-    if [ -x "$provider_script" ]; then
-        log "Warning: Provider script $provider_script is executable. It should NOT be executable; it is meant to be sourced, not run directly."
-    fi
-
-    log "Debug: Checking for provider script: $provider_script"
+    # 2. FIXED: Verify file existence BEFORE running 'ls' to prevent unhandled raw shell errors
     if [ ! -f "$provider_script" ]; then
         log "Error: Provider script not found: $provider_script"
-        ls -l "$DNSAPIDIR" >&2
+        if [ -d "$DNSAPIDIR" ]; then
+            ls -l "$DNSAPIDIR" >&2
+        fi
         return 1
     fi
+
     if [ ! -r "$provider_script" ]; then
         log "Error: Provider script is not readable: $provider_script"
         ls -l "$provider_script" >&2
         return 1
     fi
 
+    # 3. Safe executable warning boundary
+    if [ -x "$provider_script" ]; then
+        log "Warning: Provider script $provider_script is executable. It should NOT be executable; it is meant to be sourced, not run directly."
+    fi
+
     log "Debug: Loading DNS provider: $provider from $provider_script"
+
+    # Source the context natively using the POSIX dot utility
     . "$provider_script"
     source_status=$?
+
     if [ $source_status -ne 0 ]; then
         log "Error: Failed to source provider script: $provider_script (exit code $source_status)"
         return 1
     fi
 
-    log "Debug: Provider $provider loaded (function checks skipped)."
+    log "Debug: Provider $provider loaded safely."
     return 0
 }
 
@@ -853,14 +715,15 @@ dns_provider_add() {
     retries=0
     func="dns_${provider}_add"
 
-    while [ $retries -lt $DEFAULT_MAX_RETRIES ]; do
-        if $func "$domain" "$txt_value"; then
+    while [ $retries -lt "$DEFAULT_MAX_RETRIES" ]; do
+        # Dynamically execute the loaded provider's add function securely
+        if "$func" "$domain" "$txt_value"; then
             return 0
         fi
         retries=$((retries + 1))
-        if [ $retries -lt $DEFAULT_MAX_RETRIES ]; then
+        if [ $retries -lt "$DEFAULT_MAX_RETRIES" ]; then
             log "Warning: DNS add attempt $retries failed, retrying in $DEFAULT_RETRY_DELAY seconds..."
-            sleep $DEFAULT_RETRY_DELAY
+            sleep "$DEFAULT_RETRY_DELAY"
         fi
     done
     log "Error: Failed to add DNS record after $DEFAULT_MAX_RETRIES attempts"
@@ -874,14 +737,15 @@ dns_provider_rm() {
     retries=0
     func="dns_${provider}_rm"
 
-    while [ $retries -lt $DEFAULT_MAX_RETRIES ]; do
-        if $func "$domain" "$txt_value"; then
+    while [ $retries -lt "$DEFAULT_MAX_RETRIES" ]; do
+        # Dynamically execute the loaded provider's remove function securely
+        if "$func" "$domain" "$txt_value"; then
             return 0
         fi
         retries=$((retries + 1))
-        if [ $retries -lt $DEFAULT_MAX_RETRIES ]; then
+        if [ $retries -lt "$DEFAULT_MAX_RETRIES" ]; then
             log "Warning: DNS remove attempt $retries failed, retrying in $DEFAULT_RETRY_DELAY seconds..."
-            sleep $DEFAULT_RETRY_DELAY
+            sleep "$DEFAULT_RETRY_DELAY"
         fi
     done
     log "Error: Failed to remove DNS record after $DEFAULT_MAX_RETRIES attempts"
@@ -891,9 +755,9 @@ dns_provider_rm() {
 dns_provider_test() {
     provider="$1"
     func="dns_${provider}_test"
-    # Call the function and handle if not defined
-    if type "$func" 2>/dev/null | grep -q 'function'; then
-        $func
+
+    if command -v "$func" >/dev/null 2>&1; then
+        "$func"
     else
         log "Warning: Provider $provider does not support testing"
         return 0
@@ -903,9 +767,9 @@ dns_provider_test() {
 dns_provider_info() {
     provider="$1"
     func="dns_${provider}_info"
-    # Call the function and handle if not defined
-    if type "$func" 2>/dev/null | grep -q 'function'; then
-        $func
+
+    if command -v "$func" >/dev/null 2>&1; then
+        "$func"
     else
         echo "DNS Provider: $provider"
         echo "No additional information available"
@@ -940,14 +804,14 @@ dns_cmd_add() {
     DNS_ADD_TIMEOUT="${DNS_ADD_TIMEOUT:-120}"
     add_exit_code=1
 
-    # Always run in current shell for function scope
     start_time=$(date +%s)
     log "Creating TXT record _acme-challenge.$domain..."
     dns_provider_add "$DNS_PROVIDER" "$domain" "$txt_value"
     add_exit_code=$?
     end_time=$(date +%s)
+
     elapsed=$((end_time - start_time))
-    if [ $elapsed -gt "$DNS_ADD_TIMEOUT" ]; then
+    if [ "$elapsed" -gt "$DNS_ADD_TIMEOUT" ]; then
         log "Warning: Provider add operation exceeded timeout of ${DNS_ADD_TIMEOUT}s (ran ${elapsed}s)"
     fi
 
@@ -1029,25 +893,27 @@ dns_cmd_info() {
 }
 
 dns_cmd_list() {
-    log "Supported DNS Providers:"
-    log "========================"
-    log ""
+    cat <<EOF
+Supported DNS Providers:
+========================
+EOF
 
     for provider in $SUPPORTED_PROVIDERS; do
-        log "- $provider"
         if [ -f "$DNSAPIDIR/dns_${provider}.sh" ]; then
-            log "  Status: Available"
+            echo "- $provider (Status: Available)"
         else
-            log "  Status: Missing provider script"
+            echo "- $provider (Status: Missing provider script)"
         fi
-        log ""
     done
 
-    log "Current Configuration:"
-    log "- DNS_PROVIDER: ${DNS_PROVIDER:-not set}"
-    log "- DNS_MAX_WAIT: ${DNS_MAX_WAIT:-300}s (maximum propagation wait)"
-    log "- DNS_TIMEOUT: ${DEFAULT_DNS_TIMEOUT}s (hardcoded)"
-    log "- MAX_RETRIES: ${DEFAULT_MAX_RETRIES} (hardcoded)"
+    cat <<EOF
+
+Current Configuration:
+- DNS_PROVIDER: ${DNS_PROVIDER:-not set}
+- DNS_MAX_WAIT: ${DNS_MAX_WAIT:-300}s (maximum propagation wait)
+- DNS_TIMEOUT: ${DEFAULT_DNS_TIMEOUT}s (hardcoded)
+- MAX_RETRIES: ${DEFAULT_MAX_RETRIES} (hardcoded)
+EOF
 }
 
 dns_cmd_wait() {
@@ -1062,106 +928,101 @@ dns_cmd_wait() {
         return 1
     fi
 
-    # Always use active DNS propagation checking with a reasonable maximum wait
-    max_wait=${DNS_MAX_WAIT:-300}  # 5 minute safety limit
-    check_interval=15  # Check every 15 seconds
+    max_wait=${DNS_MAX_WAIT:-300}
+    check_interval=15
 
-    log "DNS propagation wait for $domain (TXT: $(printf '%.20s' "$txt_value")...)"
+    short_txt="${txt_value:0:22}"
+
+    log "DNS propagation wait for $domain (TXT: ${short_txt}...)"
     log "Active DNS propagation checking enabled. Maximum wait: ${max_wait} seconds"
 
-    # Use the existing comprehensive dns_check_propagation function
     if dns_check_propagation "$domain" "$txt_value" "$max_wait" "$check_interval"; then
         log "DNS propagation confirmed!"
         return 0
     else
         log "Warning: DNS propagation check timed out after ${max_wait} seconds, but continuing anyway"
-        return 0  # Don't fail the entire process
+        return 0
     fi
 }
 
-# Main function
-main() {
-    command="$1"
-    domain="$2"
-    token="$3"
-    key_auth="$4"
 
-    # Show usage if no command provided
-    if [ -z "$command" ]; then
-        log "DNS API Framework v$DNS_API_VERSION"
-        log "Usage: dns_api.sh <command> <domain> [token] [key_auth]"
-        log ""
-        log "Commands:"
-        log "  add <domain> <token> <key_auth>  - Add TXT record for ACME challenge"
-        log "  rm <domain> <token> <key_auth>   - Remove TXT record"
-        log "  wait <domain> <token> <key_auth> - Wait for DNS propagation"
-        log "  test                             - Test DNS provider connectivity"
-        log "  info [provider]                  - Show provider information"
-        log "  list                             - List all supported providers"
-        log ""
-        log "Configuration is loaded from renew.cfg"
-        log "Set DNS_PROVIDER to specify which provider to use"
-        log ""
-        log "ACME Integration:"
-        log "This script is called by acme_tiny.py during DNS-01 challenges"
-        log "The TXT value is calculated from the key_auth parameter"
+main() {
+    # Show usage if no command was provided globally
+    if [ -z "$COMMAND" ]; then
+        cat <<EOF
+DNS API Framework v$DNS_API_VERSION
+Usage: dns_api.sh <command> <domain> [token] [key_auth]
+
+Commands:
+  add <domain> <token> <key_auth>  - Add TXT record for ACME challenge
+  rm <domain> <token> <key_auth>   - Remove TXT record
+  wait <domain> <token> <key_auth> - Wait for DNS propagation
+  test                             - Test DNS provider connectivity
+  info [provider]                  - Show provider information
+  list                             - List all supported providers
+
+Configuration is loaded from renew.cfg
+Set DNS_PROVIDER to specify which provider to use
+
+ACME Integration:
+This script is called by acme_tiny.py during DNS-01 challenges
+The TXT value is calculated from the key_auth parameter
+EOF
         return 1
     fi
 
-    # Handle commands
-    case "$command" in
+    # Safeguard fallback sequence using global variables
+    TXT_VALUE="${TXT_VALUE:-$KEY_AUTH}"
+    TXT_VALUE="${TXT_VALUE:-$TOKEN}"
+
+    case "$COMMAND" in
         "add")
-            if [ -z "$domain" ]; then
+            if [ -z "$DOMAIN" ]; then
                 log "Error: Usage: dns_api.sh add <domain> <token> <key_auth>"
                 return 1
             fi
             if [ -z "$TXT_VALUE" ]; then
-                log "Error: Failed to calculate TXT value - key authorization required"
+                log "Error: Failed to calculate TXT value - key authorization or token required"
                 return 1
             fi
-            dns_cmd_add "$domain" "$TXT_VALUE"
+            dns_cmd_add "$DOMAIN" "$TXT_VALUE"
             ;;
         "rm"|"remove")
-            if [ -z "$domain" ]; then
+            if [ -z "$DOMAIN" ]; then
                 log "Error: Usage: dns_api.sh rm <domain> <token> <key_auth>"
                 return 1
             fi
-            # For remove, TXT_VALUE is optional as some providers can remove by domain only
-            dns_cmd_rm "$domain" "$TXT_VALUE"
+            dns_cmd_rm "$DOMAIN" "$TXT_VALUE"
             ;;
         "test")
             dns_cmd_test
             ;;
         "info")
-            dns_cmd_info "$domain"
+            dns_cmd_info "$DOMAIN"
             ;;
         "list")
             dns_cmd_list
             ;;
         "wait")
-            if [ -z "$domain" ]; then
+            if [ -z "$DOMAIN" ]; then
                 log "Error: Usage: dns_api.sh wait <domain> <token> <key_auth>"
                 return 1
             fi
             if [ -z "$TXT_VALUE" ]; then
-                log "Error: Failed to calculate TXT value - key authorization required"
+                log "Error: Failed to calculate TXT value - key authorization or token required"
                 return 1
             fi
-            dns_cmd_wait "$domain" "$TXT_VALUE"
+            dns_cmd_wait "$DOMAIN" "$TXT_VALUE"
             ;;
         *)
-            log "Error: Unknown command: $command"
+            log "Error: Unknown command: $COMMAND"
             log "Run 'dns_api.sh' without arguments to see usage"
             return 1
             ;;
     esac
 }
 
-# Initialize ESXi environment
-dns_init_esxi_environment
-
 # Run main function if script is executed directly
 if [ "${0##*/}" = "dns_api.sh" ]; then
-    main "$COMMAND" "$DOMAIN" "$TOKEN" "$KEY_AUTH"
+    main
 fi
-

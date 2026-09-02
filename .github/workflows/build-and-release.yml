@@ -42,13 +42,13 @@ jobs:
       - name: Set ENV variables
         id: set_env
         run: |
-          echo "repo_name=${GITHUB_REPOSITORY#$GITHUB_REPOSITORY_OWNER/}" >> $GITHUB_ENV
+          echo "repo_name=${GITHUB_REPOSITORY#$GITHUB_REPOSITORY_OWNER/}" >> $GITHUB_OUTPUT
           if [ "${{ github.ref_type }}" = "branch" ]; then
-            echo "vib_tag=${GITHUB_SHA:0:7}" >> $GITHUB_ENV
+            echo "vib_tag=${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
           elif [ "${{ github.ref_type }}" = "tag" ]; then
-            echo "vib_tag=${{ github.ref_name }}" >> $GITHUB_ENV
+            echo "vib_tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           else
-            echo "vib_tag=0.0.1" >> $GITHUB_ENV
+            echo "vib_tag=0.0.1" >> $GITHUB_OUTPUT
           fi
 
       - name: Create VIB

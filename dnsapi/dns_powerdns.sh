@@ -1,3 +1,5 @@
+#!/bin/sh
+#
 # PowerDNS Authoritative Server API Provider
 # Supports PowerDNS Authoritative Server with API enabled
 # Documentation: https://doc.powerdns.com/authoritative/http-api/

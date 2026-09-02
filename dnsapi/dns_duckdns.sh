@@ -1,3 +1,5 @@
+#!/bin/sh
+#
 # DuckDNS API Provider
 # Documentation: https://www.duckdns.org/spec.jsp
 #

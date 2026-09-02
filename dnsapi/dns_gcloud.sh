@@ -1,3 +1,5 @@
+#!/bin/sh
+#
 # Google Cloud DNS API Provider
 # Requires: gcloud authentication or service account key
 #

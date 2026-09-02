@@ -1,3 +1,5 @@
+#!/bin/sh
+#
 # GoDaddy DNS API Provider
 # Requires: GD_Key, GD_Secret
 #

@@ -1,3 +1,5 @@
+#!/bin/sh
+#
 # Cloudflare DNS API Provider
 # Requires: CF_API_TOKEN or CF_API_KEY + CF_EMAIL
 #
@@ -220,8 +222,8 @@ dns_cloudflare_add() {
     fi
 
     # Create new TXT record (JSON-escape quotes already present in txt_value)
-    json_content=$(printf '%s' "$txt_value" | sed 's/"/\\"/g')
-    record_data="{\n        \"type\": \"TXT\",\n        \"name\": \"$record_name\",\n        \"content\": \"$json_content\",\n        \"ttl\": $CF_TTL,\n        \"proxied\": $CF_PROXY\n    }"
+    json_content=$(printf '%s' "$txt_value" | awk '{gsub(/"/, "\\\""); print}')
+    record_data="{\"type\":\"TXT\",\"name\":\"$record_name\",\"content\":\"$json_content\",\"ttl\":$CF_TTL,\"proxied\":$CF_PROXY}"
 
     log "Debug: [CF] Creating new TXT record: $record_data"
     create_response=""
@@ -235,8 +237,7 @@ Content-Type: application/json"
 
     record_id=$(dns_json_get "$create_response" "result.id")
     success=$(dns_json_get "$create_response" "success")
-    # Normalize success to lowercase for comparison (BusyBox/ESXi compatible)
-    success_lc=$(echo "$success" | sed 'y/ABCDEFGHIJKLMNOPQRSTUVWXYZ/abcdefghijklmnopqrstuvwxyz/')
+    success_lc=$(echo "$success" | tr 'A-Z' 'a-z')
 
     if { [ "$success_lc" = "true" ] || [ "$success" = "1" ]; } && [ -n "$record_id" ] && [ "$record_id" != "null" ]; then
         log "Created Cloudflare TXT record: $record_id"
