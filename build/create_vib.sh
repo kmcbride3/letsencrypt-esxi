@@ -1,11 +1,17 @@
-#!/bin/bash
+#!/bin/sh
 #
 # Copyright (c) Johannes Feichtner <johannes@web-wack.at>
 #
-# Script to build letsencrypt-esxi VIB using VIB Author
+# Script to build VIB using VIB Author
 
 LOCALDIR=$(dirname "$(readlink -f "$0")")
-TEMP_DIR=/tmp/letsencrypt-esxi-$$
+STAGING_DIR=/tmp/${GH_REPO_NAME:-letsencrypt-esxi}-$$
+
+# Remove staging directory on exit, interrupt or termination
+cleanup() {
+  rm -rf "${STAGING_DIR}"
+}
+trap cleanup EXIT INT TERM
 
 # Ensure prerequisites are installed
 git version > /dev/null 2>&1
@@ -23,93 +29,116 @@ fi
 # Define VIB metadata
 cd "${LOCALDIR}" || exit
 
-VIB_DATE=$(date --date="$(git log -n1 --format="%cd" --date="iso")" '+%Y-%m-%dT%H:%I:%S')
-VIB_TAG=$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' --match '[0-9]*.[0-9]*.[0-9]*' 2> /dev/null || echo 0.0.1)
-# Remove leading 'v' if present
-VIB_VERSION=$(echo "$VIB_TAG" | sed 's/^v//')
-# If version does not contain a dash, append -0.0.0 (ESXi expects this format)
-case "$VIB_VERSION" in
-  *-*) ;; # already has a dash, do nothing
-  *) VIB_VERSION="${VIB_VERSION}-0.0.0" ;;
-esac
+VIB_DATE=${COMMIT_DATE:-"$(git log -n1 --format="%cd" --date="format:%Y-%m-%dT%H:%M:%S")"}
+VIB_TAG=${VIB_TAG:-"$(git describe --tags --abbrev=0 --match '[0-9]*.[0-9]*.[0-9]*' 2> /dev/null || echo 0.0.1)"}
+VIB_TAG=$(echo "$VIB_TAG" | sed 's/^v//')
+VIB_BUILD=$(date +%s | cut -c5-) # VIB_BUILD: 6-digit truncated Unix timestamp
 
 # Setting up VIB spec confs
-VIB_DESC_FILE=${TEMP_DIR}/descriptor.xml
-VIB_PAYLOAD_DIR=${TEMP_DIR}/payloads/payload1
+VIB_NAME=${GH_REPO_OWNER:-w2c}-${GH_REPO_NAME:-letsencrypt-esxi}
+PACKAGE_NAME=w2c-letsencrypt
+VIB_DESC="Let's Encrypt for ESXi"
+VENDOR="web-wack-creations"
+VIB_DESC_FILE=${STAGING_DIR}/descriptor.xml
+VIB_VERSION=${VIB_TAG}-${VIB_BUILD}
+VIB_OUTPUT=${VIB_NAME}.vib
+OFFLINE_BUNDLE_NAME=${VIB_NAME}-offline-bundle.zip
+PAYLOAD_ARCHIVE=${STAGING_DIR}/payload1
+VIB_PAYLOAD_DIR=${STAGING_DIR}/payloads/payload1
 
-# Create letsencrypt-esxi temp dir
-mkdir -p ${TEMP_DIR}
-# Create VIB spec payload directory
-mkdir -p ${VIB_PAYLOAD_DIR}
+# Set GitHub Actions environment variables for build metadata
+if [ -n "$GITHUB_OUTPUT" ]; then
+  {
+    echo "vib_date=${VIB_DATE}"
+    echo "vib_tag=${VIB_TAG}"
+    echo "vib_build=${VIB_BUILD}"
+    echo "vib_name=${VIB_NAME}"
+    echo "vib_version=${VIB_VERSION}"
+    echo "vib_output=${VIB_OUTPUT}"
+    echo "offline_bundle_name=${OFFLINE_BUNDLE_NAME}"
+  } >> "$GITHUB_OUTPUT"
+fi
+
+# Create VIB spec payload directory (and all parent directories)
+mkdir -p "${VIB_PAYLOAD_DIR}"
 
 # Create target directory
-BIN_DIR=${VIB_PAYLOAD_DIR}/opt/w2c-letsencrypt
-INIT_DIR=${VIB_PAYLOAD_DIR}/etc/init.d
-mkdir -p ${BIN_DIR} ${INIT_DIR}
+BIN_DIR="${VIB_PAYLOAD_DIR}"/opt/${PACKAGE_NAME}
+INIT_DIR="${VIB_PAYLOAD_DIR}"/etc/init.d
+mkdir -p "${BIN_DIR}" "${INIT_DIR}" || {
+  echo "Error: failed to create payload directories"
+  exit 1
+}
 
-# Copy files to the corresponding locations
-cp ../* ${BIN_DIR} 2>/dev/null
-cp ../w2c-letsencrypt ${INIT_DIR}
+# Copy only runtime files into payload
+for f in acme_tiny.py renew.sh openssl.cnf ca-certificates.crt renew.cfg.example; do
+  if [ ! -e "../${f}" ]; then
+    echo "Error: required runtime file not found: ../${f}"
+    exit 1
+  fi
+  cp "../${f}" "${BIN_DIR}/"
+done
+
+if [ ! -d "../dnsapi" ]; then
+  echo "Error: required runtime directory not found: ../dnsapi"
+  exit 1
+fi
+cp -r "../dnsapi" "${BIN_DIR}/"
+
+if [ ! -f "../${PACKAGE_NAME}" ]; then
+  echo "Error: init script not found: ../${PACKAGE_NAME}"
+  exit 1
+fi
+cp "../${PACKAGE_NAME}" "${INIT_DIR}/"
+
+# Ensure that config example is readable but not world-writable
+chmod 0644 "${BIN_DIR}"/renew.cfg.example
 
 # Only copy renew.cfg.example, do NOT create renew.cfg in the payload
-rm -f ${BIN_DIR}/renew.cfg 2>/dev/null
+rm -f "${BIN_DIR}"/renew.cfg 2>/dev/null
 
 # Copy DNS API framework and providers
 if [ -d "../dnsapi" ]; then
-    mkdir -p ${BIN_DIR}/dnsapi
-    cp ../dnsapi/* ${BIN_DIR}/dnsapi/
+    mkdir -p "${BIN_DIR}"/dnsapi
+    cp ../dnsapi/* "${BIN_DIR}"/dnsapi/
 fi
 
-# Fix line endings for shell scripts (convert Windows CRLF to Unix LF)
-for script in renew.sh test_dns.sh test_system.sh; do
-    if [ -f "${BIN_DIR}/${script}" ]; then
-        sed -i 's/\r$//' "${BIN_DIR}/${script}" 2>/dev/null || true
-    fi
-done
+# Fix line endings for all codebase text files in BIN_DIR, and make shell scripts executable
+find "${BIN_DIR}" -type f \( \
+    -name "*.sh" \
+    -o -name "*.py" \
+    -o -name "*.yml" \
+    -o -name "*.yaml" \
+    -o -name "*.md" \
+    -o -name "*.cfg.example" \
+\) \
+-exec sed -i 's/\r$//' {} + \
+-name "*.sh" -exec chmod +x {} + 2>/dev/null || true
 
-# Fix line endings for DNS API framework and providers
-if [ -f "${BIN_DIR}/dnsapi/dns_api.sh" ]; then
-    sed -i 's/\r$//' "${BIN_DIR}/dnsapi/dns_api.sh" 2>/dev/null || true
-fi
-for dns_script in ${BIN_DIR}/dnsapi/dns_*.sh; do
-    if [ -f "${dns_script}" ]; then
-        sed -i 's/\r$//' "${dns_script}" 2>/dev/null || true
-    fi
-done
-
-if [ -f "${INIT_DIR}/w2c-letsencrypt" ]; then
-    sed -i 's/\r$//' "${INIT_DIR}/w2c-letsencrypt" 2>/dev/null || true
-fi
-
-# Ensure that shell scripts are executable
-chmod +x ${INIT_DIR}/w2c-letsencrypt ${BIN_DIR}/renew.sh ${BIN_DIR}/test_dns.sh ${BIN_DIR}/test_system.sh
-
-# Make DNS API framework executable
-if [ -f "${BIN_DIR}/dnsapi/dns_api.sh" ]; then
-    chmod +x "${BIN_DIR}/dnsapi/dns_api.sh"
-fi
+# Ensure that primary  scripts is executable
+chmod +x "${INIT_DIR}"/w2c-letsencrypt
 
 # Create tgz with payload
-tar czf ${TEMP_DIR}/payload1 -C ${VIB_PAYLOAD_DIR} etc opt
+tar czf "${PAYLOAD_ARCHIVE}" -C "${VIB_PAYLOAD_DIR}" etc opt
 
 # Create letsencrypt-esxi VIB descriptor.xml
-PAYLOAD_FILES=$(tar tf ${TEMP_DIR}/payload1 | grep -v -E '/$' | sed -e 's/^/    <file>/' -e 's/$/<\/file>/')
-PAYLOAD_SIZE=$(stat -c %s ${TEMP_DIR}/payload1)
-PAYLOAD_SHA256=$(sha256sum ${TEMP_DIR}/payload1 | awk '{print $1}')
-PAYLOAD_SHA256_ZCAT=$(zcat ${TEMP_DIR}/payload1 | sha256sum | awk '{print $1}')
-PAYLOAD_SHA1_ZCAT=$(zcat ${TEMP_DIR}/payload1 | sha1sum | awk '{print $1}')
+PAYLOAD_FILES=$(tar tf "${PAYLOAD_ARCHIVE}" | grep -v -E '/$' | sed -e 's/^/    <file>/' -e 's/$/<\/file>/')
+PAYLOAD_SIZE=$(stat -c %s "${PAYLOAD_ARCHIVE}")
+PAYLOAD_SHA256=$(sha256sum "${PAYLOAD_ARCHIVE}" | awk '{print $1}')
+PAYLOAD_SHA256_ZCAT=$(zcat "${PAYLOAD_ARCHIVE}" | sha256sum | awk '{print $1}')
+PAYLOAD_SHA1_ZCAT=$(zcat "${PAYLOAD_ARCHIVE}" | sha1sum | awk '{print $1}')
 
-cat > ${VIB_DESC_FILE} << __W2C__
+cat > "${VIB_DESC_FILE}" << __${GH_REPO_OWNER:-W2C}__
 <vib version="5.0">
   <type>bootbank</type>
-  <name>w2c-letsencrypt-esxi</name>
+  <name>${VIB_NAME}</name>
   <version>${VIB_VERSION}</version>
-  <vendor>web-wack-creations</vendor>
-  <summary>Let's Encrypt for ESXi</summary>
-  <description>Let's Encrypt for ESXi</description>
+  <vendor>${VENDOR}</vendor>
+  <summary>${VIB_DESC}</summary>
+  <description>${VIB_DESC}</description>
   <release-date>${VIB_DATE}</release-date>
   <urls>
-    <url key="letsencrypt-esxi">https://github.com/w2c/letsencrypt-esxi</url>
+    <url key="${GH_REPO_NAME:-letsencrypt-esxi}">https://github.com/${GH_REPOSITORY:-w2c/letsencrypt-esxi}</url>
   </urls>
   <relationships>
     <depends/>
@@ -139,46 +168,24 @@ ${PAYLOAD_FILES}
     </payload>
   </payloads>
 </vib>
-__W2C__
+__${GH_REPO_OWNER:-W2C}__
 
-# Create letsencrypt-esxi VIB
-
-touch ${TEMP_DIR}/sig.pkcs7
-ar r w2c-letsencrypt-esxi.vib ${TEMP_DIR}/descriptor.xml ${TEMP_DIR}/sig.pkcs7 ${TEMP_DIR}/payload1
-if [ $? -ne 0 ]; then
-    echo "[ERROR] Failed to create VIB file (ar command failed)" >&2
-    exit 1
-fi
-
-# Check VIB file exists
-if [ ! -f w2c-letsencrypt-esxi.vib ]; then
-    echo "[ERROR] VIB file was not created!" >&2
-    pwd; ls -l
-    exit 1
-fi
-
-echo "[INFO] VIB file created: w2c-letsencrypt-esxi.vib"
-pwd; ls -lh w2c-letsencrypt-esxi.vib
+# Create VIB
+touch "${STAGING_DIR}/sig.pkcs7"
+ar r "${VIB_OUTPUT}" "${VIB_DESC_FILE}" "${STAGING_DIR}/sig.pkcs7" "${PAYLOAD_ARCHIVE}"
 
 # Create the offline bundle
-PYTHONPATH=/opt/vmware/vibtools-6.0.0-847598/bin python -c "import vibauthorImpl; vibauthorImpl.CreateOfflineBundle('w2c-letsencrypt-esxi.vib', 'w2c-letsencrypt-esxi-offline-bundle.zip', True)"
-if [ $? -ne 0 ]; then
-    echo "[ERROR] Failed to create offline bundle (Python vibauthorImpl)" >&2
-    exit 1
+rm -f "${OFFLINE_BUNDLE_NAME}"
+if ! PYTHONPATH=/opt/vmware/vibtools-6.0.0-847598/bin python -c "import vibauthorImpl; vibauthorImpl.CreateOfflineBundle('${VIB_OUTPUT}', '${OFFLINE_BUNDLE_NAME}', True)"; then
+  echo "[ERROR] Failed to create offline bundle: ${OFFLINE_BUNDLE_NAME}" >&2
+  exit 1
 fi
-
-# Check offline bundle exists
-if [ ! -f w2c-letsencrypt-esxi-offline-bundle.zip ]; then
-    echo "[ERROR] Offline bundle was not created!" >&2
-    pwd; ls -l
-    exit 1
+if [ ! -f "${OFFLINE_BUNDLE_NAME}" ]; then
+  echo "[ERROR] Offline bundle was not created: ${OFFLINE_BUNDLE_NAME}" >&2
+  exit 1
 fi
-
-echo "[INFO] Offline bundle created: w2c-letsencrypt-esxi-offline-bundle.zip"
-ls -lh w2c-letsencrypt-esxi-offline-bundle.zip
 
 # Show some details about what we have just created
-vibauthor -i -v w2c-letsencrypt-esxi.vib
+vibauthor -i -v "${VIB_OUTPUT}"
 
-# Remove letsencrypt-esxi temp dir
-rm -rf ${TEMP_DIR}
+# Staging cleanup handled by trap

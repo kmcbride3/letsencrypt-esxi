@@ -4,6 +4,6 @@ FROM lamw/vibauthor
 COPY . letsencrypt-esxi
 
 # Run VIB build script
-RUN /bin/bash letsencrypt-esxi/build/create_vib.sh
+RUN /bin/sh letsencrypt-esxi/build/create_vib.sh
 
-CMD ["/bin/bash"]
+CMD ["/bin/sh"]
