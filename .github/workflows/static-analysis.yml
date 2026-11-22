@@ -39,8 +39,8 @@ jobs:
       run: find . -name "*.sh" -exec shellcheck {} +
 
     # Check 4: Deep Security Vulnerabilities
-    - name: Semgrep Bash Security Scan
+    - name: Semgrep Security Scan
       run: |
         python3 -m pip install semgrep
         # The --error flag forces the workflow to break if findings are discovered
-        semgrep scan --config=p/bash --config=p/python --config=p/github-actions --error .
+        semgrep scan --config=p/security-audit --config=p/secrets --config=p/owasp-top-ten --error .
