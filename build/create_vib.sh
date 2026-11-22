@@ -31,6 +31,7 @@ cd "${LOCALDIR}" || exit
 
 VIB_DATE=${COMMIT_DATE:-"$(git log -n1 --format="%cd" --date="format:%Y-%m-%dT%H:%M:%S")"}
 VIB_TAG=${VIB_TAG:-"$(git describe --tags --abbrev=0 --match '[0-9]*.[0-9]*.[0-9]*' 2> /dev/null || echo 0.0.1)"}
+VIB_TAG=$(echo "$VIB_TAG" | sed 's/^v//')
 VIB_BUILD=$(date +%s | cut -c5-) # VIB_BUILD: 6-digit truncated Unix timestamp
 
 # Setting up VIB spec confs
