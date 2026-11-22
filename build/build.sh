@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 #
 # Copyright (c) Johannes Feichtner <johannes@web-wack.at>
 #
