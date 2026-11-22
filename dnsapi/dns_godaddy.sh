@@ -158,7 +158,6 @@ dns_godaddy_rm() {
         dns_log_warn "TXT record not found for removal: $txt_value"
         return 0
     fi
-    response=$(dns_http_request "PUT" "$GD_API_BASE/domains/$domain/records/TXT/$record_name" "$new_records" "$GD_AUTH_HEADER\nContent-Type: application/json")
     if dns_http_request "PUT" "$GD_API_BASE/domains/$domain/records/TXT/$record_name" "$new_records" "$GD_AUTH_HEADER\nContent-Type: application/json" > /dev/null 2>&1; then
         dns_log_info "Successfully removed TXT record for $full_domain"
         return 0
@@ -166,14 +165,4 @@ dns_godaddy_rm() {
         dns_log_error "Failed to remove TXT record for $full_domain"
         return 1
     fi
-        dns_log_error "Failed to connect to GoDaddy API"
-        return 1
-    fi
-    if echo "$response" | grep -q '"code"'; then
-        error_msg=$(echo "$response" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-        dns_log_error "GoDaddy API error: $error_msg"
-        return 1
-    fi
-    dns_log_info "GoDaddy DNS API test successful"
-    return 0
 }

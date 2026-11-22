@@ -36,7 +36,9 @@ jobs:
 
     # Check 3: Shell Script Formatting & Logic
     - name: Shell Syntax Check
-      run: find . -name "*.sh" -exec shellcheck {} +
+      run: |
+        # Configure for errors in the ESXi BusyBox environment
+        find . -name "*.sh" -exec shellcheck --severity=error --shell=busybox --external-sources --source-path=SCRIPTDIR --color=always {} +
 
     # Check 4: Deep Security Vulnerabilities
     - name: Semgrep Security Scan

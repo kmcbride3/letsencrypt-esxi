@@ -150,11 +150,15 @@ dns_duckdns_check_domain() {
     api_url="$DUCKDNS_API_BASE?domains=$subdomain&token=$DUCKDNS_TOKEN&verbose=true"
     if response=$(dns_http_get "$api_url"); then
         if echo "$response" | grep -q "^OK"; then
-        dns_log_info "DuckDNS subdomain $subdomain exists and is accessible"
-        return 0
+            dns_log_info "DuckDNS subdomain $subdomain exists and is accessible"
+            return 0
+        else
+            dns_log_error "DuckDNS subdomain $subdomain does not exist or is not accessible"
+            dns_log_error "Please create the subdomain at https://www.duckdns.org/"
+            return 1
+        fi
     else
-        dns_log_error "DuckDNS subdomain $subdomain does not exist or is not accessible"
-        dns_log_error "Please create the subdomain at https://www.duckdns.org/"
+        dns_log_error "Failed to query DuckDNS API"
         return 1
     fi
 }
