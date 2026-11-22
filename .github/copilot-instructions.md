@@ -40,8 +40,8 @@ This is a VMware ESXi VIB (vSphere Installation Bundle) that automates Let's Enc
 
 ### Configuration System
 - **`renew.cfg.example`** - Simplified template with essential settings and comprehensive provider examples
-- **`renew.cfg`** - User config file with backup persistence across ESXi upgrades at `/etc/w2c-letsencrypt/`
-- Config backup rotation: `.bak` (latest) → `.bak.old` (previous) with timestamp-based updates
+- **`renew.cfg`** - User config at `/opt/w2c-letsencrypt/`, with an init-script backup at `/etc/renew.cfg.bak`
+- The `config` action installs a datastore-backed boot copy in `/etc/rc.local.d/local.sh` and persists that script with `/sbin/auto-backup.sh`
 - Single DNS timeout setting: `DNS_MAX_WAIT` (hardcoded defaults for DNS_TIMEOUT, MAX_RETRIES, RETRY_DELAY, DNS_CACHE_TTL)
 
 ### DNS Provider Framework
@@ -83,10 +83,10 @@ done
 - Both challenge types require `ssl_reset` service restart after certificate installation
 
 ### Configuration Persistence Logic
-Uses sophisticated backup rotation to survive VIB upgrades:
-- Main config: `/opt/w2c-letsencrypt/renew.cfg` (ephemeral)
-- Persistent backup: `/etc/w2c-letsencrypt/renew.cfg.bak` (survives upgrades)
-- ESXi-compatible timestamp comparison using `ls -l` instead of `-nt` operator (BusyBox limitation)
+Uses an init-script backup and optional datastore-backed boot restoration:
+- Main config: `/opt/w2c-letsencrypt/renew.cfg`
+- Init-script backup: `/etc/renew.cfg.bak`
+- The `config` action updates `/etc/rc.local.d/local.sh` to copy the datastore config at boot and saves the script with `/sbin/auto-backup.sh`
 
 ### Error Handling & Validation
 - Certificate domain mismatch detection via SAN comparison

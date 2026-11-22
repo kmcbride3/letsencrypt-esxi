@@ -7,10 +7,11 @@ permissions:
 on:
   push:
     branches:
-      - '*'
+      - '**'
     tags:
       - '[0-9]+.[0-9]+.[0-9]+*'
 
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -42,7 +43,7 @@ jobs:
           if [ "${{ github.ref_type }}" = "branch" ]; then
             echo "vib_tag=${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
           elif [ "${{ github.ref_type }}" = "tag" ]; then
-            echo "vib_tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "vib_tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
           else
             echo "vib_tag=0.0.1" >> $GITHUB_OUTPUT
           fi
@@ -104,7 +105,7 @@ jobs:
           ## 📦 Installation
 
           \`\`\`bash
-          wget -O /tmp/${{ needs.build.outputs.vib_output }} https://github.com/${{ github.repository }}/releases/download/${{ needs.build.outputs.vib_tag }}/${{ needs.build.outputs.vib_output }}
+          wget -O /tmp/${{ needs.build.outputs.vib_output }} https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/${{ needs.build.outputs.vib_output }}
           esxcli software vib install -v /tmp/${{ needs.build.outputs.vib_output }} -f --no-sig-check
           \`\`\`
 

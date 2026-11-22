@@ -22,7 +22,7 @@ updates:
 
   # 3. Automatically monitors Docker base images used in your workflows
   - package-ecosystem: "docker"
-    directory: "/" # Scans for your workflows and Dockerfiles from the root down
+    directory: "/build" # Tracks build/Dockerfile
     schedule:
       interval: "weekly"
     groups:

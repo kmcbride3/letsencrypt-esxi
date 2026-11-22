@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright Daniel Roesler, under MIT license, see LICENSE at github.com/diafygi/acme-tiny
-import argparse, subprocess, json, os, sys, base64, binascii, time, hashlib, re, logging, socket, timeout, threading
+import argparse, subprocess, json, os, sys, base64, binascii, time, hashlib, re, logging, socket, threading
 
 try:
     from urllib.request import urlopen, Request # Python 3
@@ -15,7 +15,7 @@ LOGGER = logging.getLogger(__name__)
 LOGGER.addHandler(logging.StreamHandler())
 LOGGER.setLevel(logging.INFO)
 
-def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check=False, directory_url=DEFAULT_DIRECTORY_URL, contact=None, check_port=None, challenge_type="http-01"):
+def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check=False, directory_url=DEFAULT_DIRECTORY_URL, contact=None, check_port=None, challenge_type="http-01", timeout=30):
     directory, acct_headers, alg, jwk = None, None, None, None # global variables
 
     def _b64_encode_jose(b):
@@ -248,12 +248,12 @@ def main(argv=None):
     parser.add_argument("--directory-url", default=DEFAULT_DIRECTORY_URL, help="certificate authority directory url, default is Let's Encrypt")
     parser.add_argument("--contact", metavar="CONTACT", default=None, nargs="*", help="Contact details (e.g. mailto:aaa@bbb.com) for your account-key")
     parser.add_argument("--check-port", metavar="PORT", default=None, help="what port to use when self-checking the challenge file, default is port 80")
-    parser.add_argument("--challenge-type", default="http-01", choices=["http-01", "dns-01"], help="ACME challenge type to use (http-01 or dns-01)")
 
     args = parser.parse_args(argv)
-
+    if not args.acme_dir:
+        parser.error("--acme-dir is required for all challenge types")
     LOGGER.setLevel(args.quiet or LOGGER.level)
-    signed_crt = get_crt(args.account_key, args.csr, args.acme_dir, log=LOGGER, CA=args.ca, disable_check=args.disable_check, directory_url=args.directory_url, contact=args.contact, check_port=args.check_port, challenge_type=args.challenge_type)
+    signed_crt = get_crt(args.account_key, args.csr, args.acme_dir, log=LOGGER, disable_check=args.disable_check, directory_url=args.directory_url, contact=args.contact, check_port=args.check_port, challenge_type=args.challenge_type)
     sys.stdout.write(signed_crt)
 
 if __name__ == "__main__": # pragma: no cover

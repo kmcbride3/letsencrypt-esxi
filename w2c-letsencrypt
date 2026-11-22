@@ -91,8 +91,8 @@ if [ "$1" = "config" ]; then
       chmod +x /etc/rc.local.d/local.sh
    fi
 
-   grep -Fq "cp \"${CFG_PATH}\" /opt/w2c-letsencrypt/ &&" /etc/rc.local.d/local.sh 2>/dev/null || \
-      sed -i "/exit 0/i mkdir -p /opt/w2c-letsencrypt && cp \"${CFG_PATH}\" /opt/w2c-letsencrypt/ && chmod 600 /opt/w2c-letsencrypt/renew.cfg && chown root:root /opt/w2c-letsencrypt/renew.cfg" /etc/rc.local.d/local.sh
+   grep -Fq "cp \"${CFG_PATH}\" /opt/w2c-letsencrypt/renew.cfg &&" /etc/rc.local.d/local.sh 2>/dev/null || \
+      sed -i "/exit 0/i mkdir -p /opt/w2c-letsencrypt && cp \"${CFG_PATH}\" /opt/w2c-letsencrypt/renew.cfg && chmod 600 /opt/w2c-letsencrypt/renew.cfg && chown root:root /opt/w2c-letsencrypt/renew.cfg" /etc/rc.local.d/local.sh
 
    if [ -x /sbin/auto-backup.sh ]; then
       /sbin/auto-backup.sh || log "config: auto-backup failed"
@@ -112,13 +112,13 @@ else
          remove)
             # Remove cron entry (BusyBox sed -i compatibility)
             if [ -f /var/spool/cron/crontabs/root ]; then
-               cp -f /var/spool/cron/crontabs/root /var/spool/cron/crontabs/root.bak.${TS}
+               cp -f /var/spool/cron/crontabs/root /var/spool/cron/crontabs/root.bak.${TS} || { log "remove: failed to back up root crontab"; exit 1; }
                grep -v '/opt/w2c-letsencrypt' /var/spool/cron/crontabs/root.bak.${TS} > /var/spool/cron/crontabs/root
                rm -f /var/spool/cron/crontabs/root.bak.${TS}
             fi
             # Remove rhttpproxy entry (BusyBox sed -i compatibility)
             if [ -f /etc/vmware/rhttpproxy/endpoints.conf ]; then
-               cp -f /etc/vmware/rhttpproxy/endpoints.conf /etc/vmware/rhttpproxy/endpoints.conf.bak.${TS}
+               cp -f /etc/vmware/rhttpproxy/endpoints.conf /etc/vmware/rhttpproxy/endpoints.conf.bak.${TS} || { log "remove: failed to back up proxy endpoints"; exit 1; }
                grep -v 'acme-challenge' /etc/vmware/rhttpproxy/endpoints.conf.bak.${TS} > /etc/vmware/rhttpproxy/endpoints.conf
                rm -f /etc/vmware/rhttpproxy/endpoints.conf.bak.${TS}
             fi

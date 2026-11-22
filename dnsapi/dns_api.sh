@@ -196,7 +196,8 @@ dns_http_get() {
     fi
 
     # Initialize parameters using our forced ESXi flag
-    set -- -qO- "$_WGET_TLS_OPT"
+    set -- -qO-
+    [ -z "$_WGET_TLS_OPT" ] || set -- "$@" "$_WGET_TLS_OPT"
 
     if [ -n "$headers" ]; then
         OLD_IFS="$IFS"
@@ -210,7 +211,7 @@ dns_http_get() {
     set -- "$@" "$url"
 
     if [ "${DEBUG:-0}" = "1" ]; then
-        log "Debug: Final wget command: wget $*"
+        log "Debug: Executing wget GET for $url (timeout: ${timeout}s)"
     fi
 
     if which timeout >/dev/null 2>&1; then
