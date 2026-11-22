@@ -65,18 +65,60 @@ export CHALLENGE_TYPE DNS_PROVIDER DNS_MAX_WAIT \
 LOCKFILE="/var/lock/w2c-letsencrypt.lock"
 
 # Create lockfile atomically using mkdir (POSIX; avoids TOCTOU race)
+# Includes stale lock detection to handle crashes/SIGKILL/power loss
 LOCKDIR="${LOCKFILE}.lk"
-if ! mkdir "$LOCKDIR" 2>/dev/null; then
-  if [ -d "$LOCKDIR" ]; then
-    log "Another renewal is already in progress (lock: $LOCKDIR). Exiting."
-  else
-    log "Error: Failed to create lock directory: $LOCKDIR"
-    log "Possible causes: permission denied, read-only filesystem, or missing parent directory."
+LOCK_ACQUIRED=0
+
+acquire_lock() {
+  # Try to create the lock directory
+  if mkdir "$LOCKDIR" 2>/dev/null; then
+    # Lock acquired successfully
+    LOCK_ACQUIRED=1
+    return 0
   fi
+
+  # Lock directory exists - check if it's stale
+  if [ -d "$LOCKDIR" ]; then
+    pidfile="$LOCKDIR/pid"
+    if [ -f "$pidfile" ]; then
+      lock_pid=$(cat "$pidfile" 2>/dev/null)
+      # If the PID is numeric and the process doesn't exist, the lock is stale
+      if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
+        log "Warning: Stale lock detected (PID $lock_pid not running). Removing stale lock and retrying."
+        # Clean up the stale lock directory and its contents
+        rm -f "$pidfile" 2>/dev/null || true
+        rmdir "$LOCKDIR" 2>/dev/null || true
+
+        # Retry lock acquisition once
+        if mkdir "$LOCKDIR" 2>/dev/null; then
+          LOCK_ACQUIRED=1
+          return 0
+        else
+          log "Error: Failed to create lock directory after removing stale lock: $LOCKDIR"
+          return 1
+        fi
+      fi
+    fi
+    # Lock exists and process is still running (or no PID file found)
+    log "Another renewal is already in progress (lock: $LOCKDIR). Exiting."
+    return 1
+  fi
+
+  # Lock directory doesn't exist but mkdir failed for another reason
+  log "Error: Failed to create lock directory: $LOCKDIR"
+  log "Possible causes: permission denied, read-only filesystem, or missing parent directory."
+  return 1
+}
+
+# Attempt to acquire the lock
+if ! acquire_lock; then
   exit 1
 fi
 log "Starting certificate renewal."
 
+
+# Record our PID for stale lock detection (write inside lock directory)
+echo $$ > "$LOCKDIR/pid" 2>/dev/null || true
 # Cleanup function to restore firewall rules
 cleanup_firewall() {
   if [ "$CHALLENGE_TYPE" = "http-01" ]; then
@@ -105,6 +147,7 @@ cleanup_firewall() {
 cleanup() {
   cleanup_firewall
   if [ -d "$LOCKDIR" ]; then
+    rm -f "$LOCKDIR/pid" 2>/dev/null || true
     rmdir "$LOCKDIR" 2>/dev/null || true
   fi
 }
@@ -282,13 +325,25 @@ fi
 # Generate Certificate Signing Request if it doesn't exist or if domain changed
 if [ ! -r "$CSR" ] || ! openssl req -in "$CSR" -noout -text 2>/dev/null | grep -q "CN.*$DOMAIN"; then
   log "Generating Certificate Signing Request: $CSR"
+
+  # Remove any existing CSR before generation to prevent stale data if openssl fails
+  rm -f "$CSR"
+
   # Use absolute path for config file and add SAN extension for modern compatibility
   if [ -f "$LOCALDIR/openssl.cnf" ]; then
-    openssl req -new -sha256 -key "$KEY" -subj "/CN=$DOMAIN" -config "$LOCALDIR/openssl.cnf" -out "$CSR"
+    if ! openssl req -new -sha256 -key "$KEY" -subj "/CN=$DOMAIN" -config "$LOCALDIR/openssl.cnf" -out "$CSR"; then
+      log "Error: Failed to generate Certificate Signing Request (with config file)"
+      rm -f "$CSR"
+      exit 1
+    fi
   else
     # Fallback: generate CSR without config file (simpler but should work)
     log "Warning: openssl.cnf not found, generating basic CSR"
-    openssl req -new -sha256 -key "$KEY" -subj "/CN=$DOMAIN" -out "$CSR"
+    if ! openssl req -new -sha256 -key "$KEY" -subj "/CN=$DOMAIN" -out "$CSR"; then
+      log "Error: Failed to generate Certificate Signing Request (without config file)"
+      rm -f "$CSR"
+      exit 1
+    fi
   fi
 
   # Verify CSR was created successfully
