@@ -9,6 +9,9 @@ updates:
       action-updates:
         patterns:
           - "*"
+    # Wait 7 days before proposing updates to prevent malicious/unstable packages
+    cooldown:
+      default-days: 7
 
   # 2. Automatically monitors Python dependencies
   - package-ecosystem: "pip"
@@ -19,6 +22,9 @@ updates:
       python-updates:
         patterns:
           - "*"
+    # Wait 7 days before proposing updates to prevent malicious/unstable packages
+    cooldown:
+      default-days: 7
 
   # 3. Automatically monitors Docker base images used in your workflows
   - package-ecosystem: "docker"
@@ -29,3 +35,6 @@ updates:
       docker-updates:
         patterns:
           - "*"
+    # Wait 7 days before proposing updates to prevent malicious/unstable packages
+    cooldown:
+      default-days: 7
