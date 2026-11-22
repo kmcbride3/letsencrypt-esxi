@@ -1,3 +1,4 @@
+#!/bin/sh
 # NS1 DNS API Provider
 # Documentation: https://ns1.com/api
 #

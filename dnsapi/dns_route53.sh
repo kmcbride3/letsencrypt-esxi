@@ -1,3 +1,4 @@
+#!/bin/sh
 # Amazon Route53 DNS API Provider
 # Requires: AWS CLI configured with appropriate credentials
 #

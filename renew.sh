@@ -20,6 +20,7 @@ log() {
 
 # Load user configuration from the install directory if present.
 CONFIG="$LOCALDIR/renew.cfg"
+# shellcheck source=/dev/null
 if [ -r "${CONFIG}" ]; then
   . "${CONFIG}"
   log "Loaded configuration from ${CONFIG}"
@@ -32,7 +33,7 @@ DOMAIN="${DOMAIN:-$(hostname -f)}"
 ACMEDIR="${ACMEDIR:-$LOCALDIR/.well-known/acme-challenge}"
 
 # Preparation steps
-if [ -z "$DOMAIN" ] || [ "$DOMAIN" = "${DOMAIN/.}" ]; then
+if [ -z "$DOMAIN" ] || ! echo "$DOMAIN" | grep -q '\.' ; then
   log "Error: Hostname ${DOMAIN} is no FQDN."
   exit
 fi
@@ -67,13 +68,11 @@ LOCKFILE="/var/lock/w2c-letsencrypt.lock"
 # Create lockfile atomically using mkdir (POSIX; avoids TOCTOU race)
 # Includes stale lock detection to handle crashes/SIGKILL/power loss
 LOCKDIR="${LOCKFILE}.lk"
-LOCK_ACQUIRED=0
 
 acquire_lock() {
   # Try to create the lock directory
   if mkdir "$LOCKDIR" 2>/dev/null; then
     # Lock acquired successfully
-    LOCK_ACQUIRED=1
     return 0
   fi
 
@@ -91,7 +90,6 @@ acquire_lock() {
 
         # Retry lock acquisition once
         if mkdir "$LOCKDIR" 2>/dev/null; then
-          LOCK_ACQUIRED=1
           return 0
         else
           log "Error: Failed to create lock directory after removing stale lock: $LOCKDIR"
@@ -116,9 +114,9 @@ if ! acquire_lock; then
 fi
 log "Starting certificate renewal."
 
-
 # Record our PID for stale lock detection (write inside lock directory)
 echo $$ > "$LOCKDIR/pid" 2>/dev/null || true
+
 # Cleanup function to restore firewall rules
 cleanup_firewall() {
   if [ "$CHALLENGE_TYPE" = "http-01" ]; then
@@ -222,7 +220,6 @@ if [ "$CHALLENGE_TYPE" = "http-01" ]; then
   webaccess_enabled=$(esxcli network firewall ruleset list | grep "webAccess" | awk '{print $NF}')
   vsphere_enabled=$(esxcli network firewall ruleset list | grep "vSphereClient" | awk '{print $NF}')
   # Store original states for restoration
-  ORIGINAL_FIREWALL_STATE="$firewall_enabled"
   ORIGINAL_WEBACCESS_STATE="$webaccess_enabled"
   ORIGINAL_VSPHERE_STATE="$vsphere_enabled"
   # Enable required rulesets for HTTP-01

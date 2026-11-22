@@ -1,3 +1,4 @@
+#!/bin/sh
 # DigitalOcean DNS API Provider
 # Requires: DO_API_TOKEN
 #

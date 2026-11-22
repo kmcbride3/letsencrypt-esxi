@@ -14,17 +14,9 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # Ensure prerequisites are installed
-git version > /dev/null 2>&1
-if [ $? -ne 0 ]; then
-  echo "git not installed, exiting..."
-  exit 1
-fi
+git version > /dev/null 2>&1 || { echo "git not installed, exiting..."; exit 1; }
 
-vibauthor --version > /dev/null 2>&1
-if [ $? -ne 0 ]; then
-  echo "vibauthor not installed, exiting .."
-  exit 1
-fi
+vibauthor --version > /dev/null 2>&1 || { echo "vibauthor not installed, exiting .."; exit 1; }
 
 # Define VIB metadata
 cd "${LOCALDIR}" || exit
@@ -36,8 +28,6 @@ VIB_BUILD=$(date +%s | cut -c5-) # VIB_BUILD: 6-digit truncated Unix timestamp
 # Setting up VIB spec confs
 PACKAGE_NAME="w2c-letsencrypt"
 VIB_NAME="${PACKAGE_NAME}-esxi"
-VIB_SUMMARY="Let's Encrypt for ESXi"
-VIB_DESC="Let's Encrypt for ESXi"
 VENDOR="web-wack-creations"
 VIB_DESC_FILE="${STAGING_DIR}/descriptor.xml"
 VIB_VERSION="${VIB_TAG}-${VIB_BUILD}"
@@ -47,13 +37,15 @@ PAYLOAD_ARCHIVE="${STAGING_DIR}/payload1"
 VIB_PAYLOAD_DIR="${STAGING_DIR}/payloads/payload1"
 
 # Set GitHub Actions environment variables for build metadata
-echo "VIB_DATE=${VIB_DATE}" >> $GITHUB_ENV
-echo "VIB_TAG=${VIB_TAG}" >> $GITHUB_ENV
-echo "VIB_BUILD=${VIB_BUILD}" >> $GITHUB_ENV
-echo "VIB_NAME=${VIB_NAME}" >> $GITHUB_ENV
-echo "VIB_VERSION=${VIB_VERSION}" >> $GITHUB_ENV
-echo "VIB_OUTPUT=${VIB_OUTPUT}" >> $GITHUB_ENV
-echo "OFFLINE_BUNDLE_NAME=${OFFLINE_BUNDLE_NAME}" >> $GITHUB_ENV
+{
+  echo "VIB_DATE=${VIB_DATE}"
+  echo "VIB_TAG=${VIB_TAG}"
+  echo "VIB_BUILD=${VIB_BUILD}"
+  echo "VIB_NAME=${VIB_NAME}"
+  echo "VIB_VERSION=${VIB_VERSION}"
+  echo "VIB_OUTPUT=${VIB_OUTPUT}"
+  echo "OFFLINE_BUNDLE_NAME=${OFFLINE_BUNDLE_NAME}"
+} >> "$GITHUB_ENV"
 
 # Create VIB spec payload directory (and all parent directories)
 mkdir -p "${VIB_PAYLOAD_DIR}"
@@ -110,7 +102,7 @@ done
 if [ -f "${BIN_DIR}/dnsapi/dns_api.sh" ]; then
     sed -i 's/\r$//' "${BIN_DIR}/dnsapi/dns_api.sh" 2>/dev/null || true
 fi
-for dns_script in ${BIN_DIR}/dnsapi/dns_*.sh; do
+for dns_script in "${BIN_DIR}"/dnsapi/dns_*.sh; do
     if [ -f "${dns_script}" ]; then
         sed -i 's/\r$//' "${dns_script}" 2>/dev/null || true
     fi

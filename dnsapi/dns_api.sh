@@ -48,7 +48,7 @@ calculate_txt_value() {
 
     # Use the same calculation as acme_tiny.py: base64(sha256(key_auth))
     if which python3 >/dev/null 2>&1; then
-        echo -n "$key_auth" | python3 -c "
+        printf '%s' "$key_auth" | python3 -c "
 import sys, hashlib, base64
 data = sys.stdin.read().encode('utf8')
 hash_digest = hashlib.sha256(data).digest()
@@ -56,7 +56,7 @@ result = base64.urlsafe_b64encode(hash_digest).decode('utf8').replace('=', '')
 print(result)
 "
     elif which python >/dev/null 2>&1; then
-        echo -n "$key_auth" | python -c "
+        printf '%s' "$key_auth" | python -c "
 import sys, hashlib, base64
 data = sys.stdin.read().encode('utf8')
 hash_digest = hashlib.sha256(data).digest()
@@ -65,7 +65,7 @@ print(result)
 "
     else
         # Fallback using openssl (ESXi compatible)
-        echo -n "$key_auth" | openssl dgst -sha256 -binary | openssl base64 -A | \
+        printf '%s' "$key_auth" | openssl dgst -sha256 -binary | openssl base64 -A | \
             sed 's/=//g' | sed 'y/\/+/_-/'
     fi
 }
@@ -93,8 +93,10 @@ fi
 
 # Load configuration from renew.cfg
 if [ -r "$LOCALDIR/renew.cfg" ]; then
+    # shellcheck source=/dev/null
     . "$LOCALDIR/renew.cfg"
 elif [ -r "$DNSAPIDIR/../renew.cfg" ]; then
+    # shellcheck source=/dev/null
     . "$DNSAPIDIR/../renew.cfg"
 fi
 
@@ -103,7 +105,6 @@ DNS_API_VERSION="1.2.0"
 
 # Default settings that providers can override (hardcoded for simplicity)
 DEFAULT_DNS_TIMEOUT=30
-DEFAULT_TTL=120
 DEFAULT_PROPAGATION_WAIT=120
 DEFAULT_MAX_RETRIES=3
 DEFAULT_RETRY_DELAY=5
@@ -245,7 +246,6 @@ dns_http_get() {
     url="$1"
     headers="$2"
     timeout="${3:-$DEFAULT_DNS_TIMEOUT}"
-    max_redirects="${4:-5}"
 
     # Ensure timeout is a bare integer (BusyBox compatible)
     timeout="$(echo "$timeout" | sed 's/[a-zA-Z]//g')"
@@ -280,7 +280,7 @@ dns_http_get() {
         log "Debug: Final wget command: wget $*"
     fi
     if which timeout >/dev/null 2>&1; then
-        response=$(timeout -t $timeout wget "$@" 2>&1)
+        response=$(timeout -t "$timeout" wget "$@" 2>&1)
         if [ "${DEBUG:-0}" = "1" ]; then
             echo "Debug: Raw HTTP GET response:" >&2
             echo "$response" >&2
@@ -352,7 +352,7 @@ dns_http_post() {
         log "Debug: Final wget POST command: wget $*"
     fi
     if which timeout >/dev/null 2>&1; then
-        response=$(timeout -t $timeout wget "$@" 2>&1)
+        response=$(timeout -t "$timeout" wget "$@" 2>&1)
         if [ "${DEBUG:-0}" = "1" ]; then
             echo "Debug: Raw HTTP POST response:" >&2
             echo "$response" >&2
@@ -476,7 +476,7 @@ dns_url_encode() {
                     encoded="$encoded$(printf '%%%02X' "'$char")"
                 else
                     # Fallback for limited environments
-                    encoded="$encoded%$(echo -n "$char" | od -An -tx1 | sed 's/ //g')"
+                    encoded="$encoded%$(printf '%s' "$char" | od -An -tx1 | sed 's/ //g')"
                 fi
                 ;;
         esac
@@ -668,7 +668,7 @@ dns_check_propagation() {
         fi
     fi
 
-    while [ $waited -lt $max_wait ]; do
+    while [ "$waited" -lt "$max_wait" ]; do
         found=0
         total_resolvers=0
         resolvers_to_check="$public_resolvers"
@@ -711,7 +711,7 @@ dns_check_propagation() {
         fi
 
         log "Debug: DNS propagation incomplete ($found/$total_resolvers), waiting $check_interval seconds..."
-        sleep $check_interval
+        sleep "$check_interval"
         waited=$((waited + check_interval))
     done
 
@@ -770,7 +770,7 @@ dns_init_esxi_environment() {
 
     # ESXi-optimized defaults (memory-based caching only)
     DNS_CACHE_TTL=120                         # 2 minutes - conservative for ESXi
-    DNS_USE_FILE_CACHE=0                      # Always disabled for ESXi read-only filesystem
+        DNS_USE_FILE_CACHE=0                      # Always disabled for ESXi read-only filesystem
 
     # Check memory constraints specific to ESXi
     free_mem=""
@@ -834,6 +834,7 @@ dns_load_provider() {
     fi
 
     log "Debug: Loading DNS provider: $provider from $provider_script"
+    # shellcheck source=/dev/null
     . "$provider_script"
     source_status=$?
     if [ $source_status -ne 0 ]; then
@@ -1083,8 +1084,7 @@ dns_cmd_wait() {
 main() {
     command="$1"
     domain="$2"
-    token="$3"
-    key_auth="$4"
+    key_auth="$3"
 
     # Show usage if no command provided
     if [ -z "$command" ]; then

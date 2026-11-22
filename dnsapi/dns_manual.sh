@@ -1,3 +1,4 @@
+#!/bin/sh
 # Manual DNS API Provider
 # For testing or when automatic DNS management is not available
 #
@@ -67,7 +68,7 @@ dns_manual_add() {
     fi
 
     log "Press Enter when the record is created and has propagated..."
-    read dummy
+    read -r dummy
 
     log "Verifying DNS propagation..."
     if dns_check_propagation "$domain" "$txt_value" 180 15; then
@@ -82,7 +83,7 @@ dns_manual_add() {
         log "- Different DNS resolvers"
         log ""
         log "Press Enter to continue anyway, or Ctrl+C to abort..."
-        read dummy
+    read -r dummy
         return 0
     fi
 }
@@ -113,6 +114,6 @@ dns_manual_rm() {
         return 0
     fi
     log "Press Enter to continue..."
-    read dummy
+    read -r dummy
     return 0
 }

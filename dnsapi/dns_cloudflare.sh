@@ -1,3 +1,4 @@
+#!/bin/sh
 # Cloudflare DNS API Provider
 # Requires: CF_API_TOKEN or CF_API_KEY + CF_EMAIL
 #

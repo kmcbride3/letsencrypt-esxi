@@ -1,3 +1,4 @@
+#!/bin/sh
 # Azure DNS API Provider
 # Supports Service Principal, Managed Identity, and Bearer Token authentication
 #

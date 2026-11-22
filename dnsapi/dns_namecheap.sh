@@ -1,3 +1,4 @@
+#!/bin/sh
 # Namecheap DNS API Provider
 # Requires: NAMECHEAP_USERNAME, NAMECHEAP_API_KEY, NAMECHEAP_SOURCEIP
 #
