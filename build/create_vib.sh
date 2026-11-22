@@ -174,7 +174,15 @@ touch "${STAGING_DIR}/sig.pkcs7"
 ar r "${VIB_OUTPUT}" "${VIB_DESC_FILE}" "${STAGING_DIR}/sig.pkcs7" "${PAYLOAD_ARCHIVE}"
 
 # Create the offline bundle
-PYTHONPATH=/opt/vmware/vibtools-6.0.0-847598/bin python -c "import vibauthorImpl; vibauthorImpl.CreateOfflineBundle('${VIB_OUTPUT}', '${OFFLINE_BUNDLE_NAME}', True)"
+rm -f "${OFFLINE_BUNDLE_NAME}"
+if ! PYTHONPATH=/opt/vmware/vibtools-6.0.0-847598/bin python -c "import vibauthorImpl; vibauthorImpl.CreateOfflineBundle('${VIB_OUTPUT}', '${OFFLINE_BUNDLE_NAME}', True)"; then
+  echo "[ERROR] Failed to create offline bundle: ${OFFLINE_BUNDLE_NAME}" >&2
+  exit 1
+fi
+if [ ! -f "${OFFLINE_BUNDLE_NAME}" ]; then
+  echo "[ERROR] Offline bundle was not created: ${OFFLINE_BUNDLE_NAME}" >&2
+  exit 1
+fi
 
 # Show some details about what we have just created
 vibauthor -i -v "${VIB_OUTPUT}"
