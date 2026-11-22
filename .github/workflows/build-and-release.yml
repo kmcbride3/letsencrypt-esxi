@@ -73,7 +73,7 @@ jobs:
             /bin/sh ./build/create_vib.sh
 
       - name: Store VIB
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ${{ steps.run_build.outputs.vib_name }}-${{ steps.run_build.outputs.vib_version }}
           path: |
@@ -90,7 +90,7 @@ jobs:
       contents: write
     steps:
       - name: Retrieve build artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: ${{ needs.build.outputs.vib_name }}-${{ needs.build.outputs.vib_version }}
           path: .
@@ -114,7 +114,7 @@ jobs:
 
       - name: Create release
         id: create_release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           tag_name: ${{ needs.build.outputs.vib_tag }}
