@@ -43,7 +43,7 @@ calculate_txt_value() {
 
     # Use the same calculation as acme_tiny.py: base64(sha256(key_auth))
     if which python3 >/dev/null 2>&1; then
-        echo -n "$key_auth" | python3 -c "
+        printf '%s' "$key_auth" | python3 -c "
 import sys, hashlib, base64
 data = sys.stdin.read().encode('utf8')
 hash_digest = hashlib.sha256(data).digest()
@@ -51,7 +51,7 @@ result = base64.urlsafe_b64encode(hash_digest).decode('utf8').replace('=', '')
 print(result)
 "
     elif which python >/dev/null 2>&1; then
-        echo -n "$key_auth" | python -c "
+        printf '%s' "$key_auth" | python -c "
 import sys, hashlib, base64
 data = sys.stdin.read().encode('utf8')
 hash_digest = hashlib.sha256(data).digest()
@@ -60,7 +60,7 @@ print(result)
 "
     else
         # Fallback using openssl (ESXi compatible)
-        echo -n "$key_auth" | openssl dgst -sha256 -binary | openssl base64 -A | \
+        printf '%s' "$key_auth" | openssl dgst -sha256 -binary | openssl base64 -A | \
             sed 's/=//g' | sed 'y/\/+/_-/'
     fi
 }
@@ -88,8 +88,10 @@ fi
 
 # Load configuration from renew.cfg
 if [ -r "$LOCALDIR/renew.cfg" ]; then
+    # shellcheck disable=SC1090,SC1091
     . "$LOCALDIR/renew.cfg"
 elif [ -r "$DNSAPIDIR/../renew.cfg" ]; then
+    # shellcheck disable=SC1090,SC1091
     . "$DNSAPIDIR/../renew.cfg"
 fi
 
@@ -98,7 +100,6 @@ DNS_API_VERSION="1.2.0"
 
 # Default settings that providers can override (hardcoded for simplicity)
 DEFAULT_DNS_TIMEOUT=30
-DEFAULT_TTL=120
 DEFAULT_PROPAGATION_WAIT=120
 DEFAULT_MAX_RETRIES=3
 DEFAULT_RETRY_DELAY=5
@@ -420,7 +421,7 @@ dns_json_get() {
     case "$json" in
         *\""$target_key"\"*)
             # Step 1: Chop everything off before the key
-            tmp="${json#*\"$target_key\"}"
+            tmp="${json#*\""$target_key"\"}"
             # Step 2: Chop up to the opening value context (skip colon and optional spaces/quotes)
             tmp="${tmp#*:}"
             tmp="${tmp#*[[:space:]]}"
@@ -441,12 +442,12 @@ dns_json_get() {
                     clean_val=""
                     while [ -n "$tmp" ]; do
                         case "$tmp" in
-                            *[$\'\r\'$\'\n\'$\'\t\'\ ]*)
+                            *[[:space:]]*)
                                 # Snip out everything before the whitespace char
-                                part="${tmp%%[$\'\r\'$\'\n\'$\'\t\'\ ]*}"
+                                part="${tmp%%[[:space:]]*}"
                                 clean_val="$clean_val$part"
                                 # Shrink the string past the whitespace character
-                                tmp="${tmp#*[$\'\r\'$\'\n\'$\'\t\'\ ]}"
+                                tmp="${tmp#*[[:space:]]}"
                                 ;;
                             *)
                                 clean_val="$clean_val$tmp"
@@ -571,7 +572,7 @@ dns_check_propagation() {
         log "Debug: Found authoritative nameserver: $auth_ns"
     fi
 
-    while [ $waited -lt $max_wait ]; do
+    while [ $waited -lt "$max_wait" ]; do
         found=0
         total_resolvers=0
         resolvers_to_check="$public_resolvers"
@@ -614,7 +615,7 @@ dns_check_propagation() {
         fi
 
         log "Debug: DNS propagation incomplete ($found/$total_resolvers), waiting $check_interval seconds..."
-        sleep $check_interval
+        sleep "$check_interval"
         waited=$((waited + check_interval))
     done
 
@@ -695,6 +696,7 @@ dns_load_provider() {
     log "Debug: Loading DNS provider: $provider from $provider_script"
 
     # Source the context natively using the POSIX dot utility
+    # shellcheck disable=SC1090
     . "$provider_script"
     source_status=$?
 
@@ -931,7 +933,7 @@ dns_cmd_wait() {
     max_wait=${DNS_MAX_WAIT:-300}
     check_interval=15
 
-    short_txt="${txt_value:0:22}"
+    short_txt=$(printf '%s' "$txt_value" | cut -c 1-22)
 
     log "DNS propagation wait for $domain (TXT: ${short_txt}...)"
     log "Active DNS propagation checking enabled. Maximum wait: ${max_wait} seconds"

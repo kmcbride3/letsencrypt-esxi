@@ -21,6 +21,7 @@ log() {
 # Load user configuration from the install directory if present.
 CONFIG="$LOCALDIR/renew.cfg"
 if [ -r "${CONFIG}" ]; then
+  # shellcheck disable=SC1090
   . "${CONFIG}"
   log "Loaded configuration from ${CONFIG}"
 elif [ -f "${CONFIG}" ]; then
@@ -81,10 +82,13 @@ trap 'cleanup' EXIT HUP INT TERM
 log "Starting certificate renewal."
 
 # Preparation steps
-if [ -z "$DOMAIN" ] || [ "$DOMAIN" = "${DOMAIN/.}" ]; then
-  log "Error: Hostname ${DOMAIN} is no FQDN."
-  exit
-fi
+case "$DOMAIN" in
+  *.*) ;;
+  *)
+    log "Error: Hostname ${DOMAIN} is no FQDN."
+    exit
+    ;;
+esac
 
 # Add a cronjob for auto renewal. The script is run once a week on Sunday at 00:00
 if ! grep -q "$LOCALDIR/$LOCALSCRIPT" /var/spool/cron/crontabs/root; then
@@ -183,11 +187,9 @@ if [ "$CHALLENGE_TYPE" = "http-01" ]; then
 
   # Firewall management for HTTP-01 (needs inbound access on port 80/443)
   log "Configuring firewall for HTTP-01 challenge..."
-  firewall_enabled=$(esxcli network firewall get | grep "Enabled:" | awk '{print $NF}')
   webaccess_enabled=$(esxcli network firewall ruleset list | grep "webAccess" | awk '{print $NF}')
   vsphere_enabled=$(esxcli network firewall ruleset list | grep "vSphereClient" | awk '{print $NF}')
   # Store original states for restoration
-  ORIGINAL_FIREWALL_STATE="$firewall_enabled"
   ORIGINAL_WEBACCESS_STATE="$webaccess_enabled"
   ORIGINAL_VSPHERE_STATE="$vsphere_enabled"
   # Enable required rulesets for HTTP-01
@@ -354,7 +356,8 @@ if [ -n "$CERT" ]; then
 elif openssl x509 -checkend 86400 -noout -in "$VMWARE_CRT" 2>/dev/null; then
   log "Warning: No cert obtained from Let's Encrypt. Keeping the existing one as it is still valid."
   if [ -s acme_error.log ]; then
-    log "acme_tiny.py error output:"; cat acme_error.log | while read line; do log "$line"; done
+    log "acme_tiny.py error output:"
+    while IFS= read -r line; do log "$line"; done < acme_error.log
   fi
 else
   log "Error: No cert obtained from Let's Encrypt. Generating a self-signed certificate."

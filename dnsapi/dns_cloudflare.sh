@@ -237,7 +237,7 @@ Content-Type: application/json"
 
     record_id=$(dns_json_get "$create_response" "result.id")
     success=$(dns_json_get "$create_response" "success")
-    success_lc=$(echo "$success" | tr 'A-Z' 'a-z')
+    success_lc=$(echo "$success" | tr '[:upper:]' '[:lower:]')
 
     if { [ "$success_lc" = "true" ] || [ "$success" = "1" ]; } && [ -n "$record_id" ] && [ "$record_id" != "null" ]; then
         log "Created Cloudflare TXT record: $record_id"
