@@ -54,8 +54,7 @@ _pdns_setup() {
 _pdns_find_zone() {
     domain="$1"
     zones_url="$PDNS_URL/api/v1/servers/localhost/zones"
-    response=$(dns_http_get "$zones_url" "X-API-Key: $PDNS_API_KEY\nContent-Type: application/json")
-    if [ $? -ne 0 ]; then
+    if ! response=$(dns_http_get "$zones_url" "X-API-Key: $PDNS_API_KEY\nContent-Type: application/json"); then
         dns_log_error "Failed to list PowerDNS zones"
         return 1
     fi
@@ -91,8 +90,7 @@ _pdns_get_rrsets() {
     record_name="$2"
     record_type="$3"
     zone_url="$PDNS_URL/api/v1/servers/localhost/zones/$zone"
-    response=$(dns_http_get "$zone_url" "X-API-Key: $PDNS_API_KEY\nContent-Type: application/json")
-    if [ $? -eq 0 ]; then
+    if response=$(dns_http_get "$zone_url" "X-API-Key: $PDNS_API_KEY\nContent-Type: application/json"); then
         temp_file="/tmp/pdns_rrsets_$$"
         echo "$response" | awk -F'}' '{for(i=1;i<=NF;i++) print $i}' | grep -E "\"name\"[[:space:]]*:[[:space:]]*\"$record_name\\.?\"" | grep "\"type\"[[:space:]]*:[[:space:]]*\"$record_type\"" > "$temp_file" 2>/dev/null || true
         if [ -s "$temp_file" ]; then
@@ -120,9 +118,7 @@ dns_powerdns_add() {
         record_name="$record_name."
     fi
     dns_log_debug "Zone: $zone, Record: $record_name"
-    existing_rrset=$(_pdns_get_rrsets "$zone" "$domain" "TXT")
-    records_json=""
-    if [ $? -eq 0 ]; then
+    if existing_rrset=$(_pdns_get_rrsets "$zone" "$domain" "TXT"); then
         dns_log_debug "Found existing TXT records, adding to them"
         temp_file="/tmp/pdns_records_$$"
         echo "$existing_rrset" | awk -F',' '{for(i=1;i<=NF;i++) print $i}' | grep '"content"' | sed 's/.*"content"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' > "$temp_file" 2>/dev/null || true
@@ -150,8 +146,7 @@ dns_powerdns_add() {
     fi
     patch_data="{\n    \"rrsets\": [\n        {\n            \"name\": \"$record_name\",\n            \"type\": \"TXT\",\n            \"changetype\": \"REPLACE\",\n            \"records\": [$records_json],\n            \"ttl\": $PDNS_TTL\n        }\n    ]\n}"
     zone_url="$PDNS_URL/api/v1/servers/localhost/zones/$zone"
-    response=$(dns_http_request "PATCH" "$zone_url" "$patch_data" "X-API-Key: $PDNS_API_KEY\nContent-Type: application/json")
-    if [ $? -eq 0 ]; then
+    if dns_http_request "PATCH" "$zone_url" "$patch_data" "X-API-Key: $PDNS_API_KEY\nContent-Type: application/json"; then
         dns_log_info "Successfully added TXT record for $domain"
         return 0
     else
@@ -171,8 +166,7 @@ dns_powerdns_rm() {
     if ! echo "$record_name" | grep -q '\.$'; then
         record_name="$record_name."
     fi
-    existing_rrset=$(_pdns_get_rrsets "$zone" "$domain" "TXT")
-    if [ $? -ne 0 ]; then
+    if ! existing_rrset=$(_pdns_get_rrsets "$zone" "$domain" "TXT"); then
         dns_log_warn "TXT record not found for $domain"
         return 0
     fi
@@ -207,8 +201,7 @@ dns_powerdns_rm() {
         dns_log_debug "Updating TXT RRSet with remaining records"
         patch_data="{\n    \"rrsets\": [\n        {\n            \"name\": \"$record_name\",\n            \"type\": \"TXT\",\n            \"changetype\": \"REPLACE\",\n            \"records\": [$records_json],\n            \"ttl\": $PDNS_TTL\n        }\n    ]\n}"
     fi
-    response=$(dns_http_request "PATCH" "$zone_url" "$patch_data" "X-API-Key: $PDNS_API_KEY\nContent-Type: application/json")
-    if [ $? -eq 0 ]; then
+    if dns_http_request "PATCH" "$zone_url" "$patch_data" "X-API-Key: $PDNS_API_KEY\nContent-Type: application/json"; then
         dns_log_info "Successfully removed TXT record for $domain"
         return 0
     else
@@ -222,8 +215,7 @@ dns_powerdns_test() {
     dns_log_info "Testing PowerDNS API connectivity"
     _pdns_setup || return 1
     config_url="$PDNS_URL/api/v1/servers/localhost/config"
-    response=$(dns_http_get "$config_url" "X-API-Key: $PDNS_API_KEY\nContent-Type: application/json")
-    if [ $? -ne 0 ]; then
+    if ! response=$(dns_http_get "$config_url" "X-API-Key: $PDNS_API_KEY\nContent-Type: application/json"); then
         dns_log_error "Failed to connect to PowerDNS API at $PDNS_URL"
         return 1
     fi
@@ -233,8 +225,7 @@ dns_powerdns_test() {
         return 1
     fi
     zones_url="$PDNS_URL/api/v1/servers/localhost/zones"
-    zones_response=$(dns_http_get "$zones_url" "X-API-Key: $PDNS_API_KEY\nContent-Type: application/json")
-    if [ $? -ne 0 ]; then
+    if ! dns_http_get "$zones_url" "X-API-Key: $PDNS_API_KEY\nContent-Type: application/json" >/dev/null; then
         dns_log_error "Failed to list PowerDNS zones"
         return 1
     fi

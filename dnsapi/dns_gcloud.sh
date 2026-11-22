@@ -40,8 +40,7 @@ gcloud_setup_auth() {
     if [ -n "$GCP_SERVICE_ACCOUNT_KEY" ]; then
         dns_log_debug "Using service account key authentication"
         key_file="/tmp/gcp_key_$$.json"
-        echo "$GCP_SERVICE_ACCOUNT_KEY" | base64 -d > "$key_file" 2>/dev/null
-        if [ $? -ne 0 ]; then
+        if ! echo "$GCP_SERVICE_ACCOUNT_KEY" | base64 -d > "$key_file" 2>/dev/null; then
             dns_log_error "Failed to decode GCP_SERVICE_ACCOUNT_KEY"
             return 1
         fi
@@ -95,8 +94,7 @@ gcloud_find_zone() {
     access_token="$2"
     test_domain="$domain"
     while [ -n "$test_domain" ]; do
-        zone_response=$(dns_http_get "$GCP_API_BASE/projects/$GCP_PROJECT_ID/managedZones" "Authorization: Bearer $access_token\nContent-Type: application/json")
-        if [ $? -eq 0 ]; then
+        if zone_response=$(dns_http_get "$GCP_API_BASE/projects/$GCP_PROJECT_ID/managedZones" "Authorization: Bearer $access_token\nContent-Type: application/json"); then
             temp_file="/tmp/gcp_zones_$$"
             echo "$zone_response" | awk -F',' '{for(i=1;i<=NF;i++) print $i}' | grep -E '"name"|"dnsName"' > "$temp_file" 2>/dev/null || true
             zone_name=""
@@ -131,8 +129,12 @@ dns_gcloud_add() {
     txt_value="$2"
     dns_log_info "Adding TXT record for $domain"
     gcloud_setup_auth || { gcloud_cleanup; return 1; }
-    access_token=$(gcloud_get_access_token)
-    if [ $? -ne 0 ] || [ -z "$access_token" ]; then
+    if ! access_token=$(gcloud_get_access_token); then
+        dns_log_error "Failed to get Google Cloud access token"
+        gcloud_cleanup
+        return 1
+    fi
+    if [ -z "$access_token" ]; then
         dns_log_error "Failed to get Google Cloud access token"
         gcloud_cleanup
         return 1
@@ -144,8 +146,7 @@ dns_gcloud_add() {
     fi
     dns_log_debug "Using zone: $zone_name"
     change_request="{\"additions\":[{\"name\":\"${domain}.\",\"type\":\"TXT\",\"ttl\":${GCP_TTL},\"rrdatas\":[\"\\\"${txt_value}\\\"\"]}]}"
-    response=$(dns_http_request "POST" "$GCP_API_BASE/projects/$GCP_PROJECT_ID/managedZones/$zone_name/changes" "$change_request" "Authorization: Bearer $access_token\nContent-Type: application/json")
-    if [ $? -eq 0 ]; then
+    if dns_http_request "POST" "$GCP_API_BASE/projects/$GCP_PROJECT_ID/managedZones/$zone_name/changes" "$change_request" "Authorization: Bearer $access_token\nContent-Type: application/json"; then
         dns_log_info "Successfully added TXT record for $domain"
         gcloud_cleanup
         return 0
@@ -162,8 +163,12 @@ dns_gcloud_rm() {
     txt_value="$2"
     dns_log_info "Removing TXT record for $domain"
     gcloud_setup_auth || { gcloud_cleanup; return 1; }
-    access_token=$(gcloud_get_access_token)
-    if [ $? -ne 0 ] || [ -z "$access_token" ]; then
+    if ! access_token=$(gcloud_get_access_token); then
+        dns_log_error "Failed to get Google Cloud access token"
+        gcloud_cleanup
+        return 1
+    fi
+    if [ -z "$access_token" ]; then
         dns_log_error "Failed to get Google Cloud access token"
         gcloud_cleanup
         return 1
@@ -174,8 +179,7 @@ dns_gcloud_rm() {
         zone_name=$(gcloud_find_zone "$domain" "$access_token") || { gcloud_cleanup; return 1; }
     fi
     change_request="{\"deletions\":[{\"name\":\"${domain}.\",\"type\":\"TXT\",\"ttl\":${GCP_TTL},\"rrdatas\":[\"\\\"${txt_value}\\\"\"]}]}"
-    response=$(dns_http_request "POST" "$GCP_API_BASE/projects/$GCP_PROJECT_ID/managedZones/$zone_name/changes" "$change_request" "Authorization: Bearer $access_token\nContent-Type: application/json")
-    if [ $? -eq 0 ]; then
+    if dns_http_request "POST" "$GCP_API_BASE/projects/$GCP_PROJECT_ID/managedZones/$zone_name/changes" "$change_request" "Authorization: Bearer $access_token\nContent-Type: application/json"; then
         dns_log_info "Successfully removed TXT record for $domain"
         gcloud_cleanup
         return 0
@@ -189,14 +193,17 @@ dns_gcloud_rm() {
 dns_gcloud_test() {
     dns_log_info "Testing Google Cloud DNS API connectivity"
     gcloud_setup_auth || { gcloud_cleanup; return 1; }
-    access_token=$(gcloud_get_access_token)
-    if [ $? -ne 0 ] || [ -z "$access_token" ]; then
+    if ! access_token=$(gcloud_get_access_token); then
         dns_log_error "Failed to get Google Cloud access token"
         gcloud_cleanup
         return 1
     fi
-    response=$(dns_http_get "$GCP_API_BASE/projects/$GCP_PROJECT_ID/managedZones" "Authorization: Bearer $access_token\nContent-Type: application/json")
-    if [ $? -ne 0 ]; then
+    if [ -z "$access_token" ]; then
+        dns_log_error "Failed to get Google Cloud access token"
+        gcloud_cleanup
+        return 1
+    fi
+    if ! response=$(dns_http_get "$GCP_API_BASE/projects/$GCP_PROJECT_ID/managedZones" "Authorization: Bearer $access_token\nContent-Type: application/json"); then
         dns_log_error "Failed to connect to Google Cloud DNS API"
         gcloud_cleanup
         return 1

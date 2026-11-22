@@ -77,8 +77,7 @@ nc_get_domain_parts() {
 nc_get_host_records() {
     sld="$1"
     tld="$2"
-    response=$(dns_http_get "${NC_API_BASE}?ApiUser=${NAMECHEAP_USERNAME}&ApiKey=${NAMECHEAP_API_KEY}&UserName=${NAMECHEAP_USERNAME}&Command=namecheap.domains.dns.getHosts&ClientIp=${SOURCEIP}&SLD=${sld}&TLD=${tld}")
-    if [ $? -ne 0 ]; then
+    if ! response=$(dns_http_get "${NC_API_BASE}?ApiUser=${NAMECHEAP_USERNAME}&ApiKey=${NAMECHEAP_API_KEY}&UserName=${NAMECHEAP_USERNAME}&Command=namecheap.domains.dns.getHosts&ClientIp=${SOURCEIP}&SLD=${sld}&TLD=${tld}"); then
         dns_log_error "Failed to get DNS records for ${sld}.${tld}"
         return 1
     fi
@@ -90,8 +89,7 @@ nc_set_host_records() {
     tld="$2"
     host_records="$3"
     url="${NC_API_BASE}?ApiUser=${NAMECHEAP_USERNAME}&ApiKey=${NAMECHEAP_API_KEY}&UserName=${NAMECHEAP_USERNAME}&Command=namecheap.domains.dns.setHosts&ClientIp=${SOURCEIP}&SLD=${sld}&TLD=${tld}${host_records}"
-    response=$(dns_http_get "$url")
-    if [ $? -ne 0 ]; then
+    if ! response=$(dns_http_get "$url"); then
         dns_log_error "Failed to set DNS records for ${sld}.${tld}"
         return 1
     fi
@@ -113,8 +111,7 @@ dns_namecheap_add() {
     sld=$(echo "$domain_parts" | cut -d' ' -f1)
     tld=$(echo "$domain_parts" | cut -d' ' -f2)
     dns_log_debug "Domain parts - SLD: $sld, TLD: $tld"
-    current_records=$(nc_get_host_records "$sld" "$tld")
-    if [ $? -ne 0 ]; then
+    if ! current_records=$(nc_get_host_records "$sld" "$tld"); then
         return 1
     fi
     host_params=""
@@ -152,8 +149,7 @@ dns_namecheap_rm() {
     domain_parts=$(nc_get_domain_parts "$domain")
     sld=$(echo "$domain_parts" | cut -d' ' -f1)
     tld=$(echo "$domain_parts" | cut -d' ' -f2)
-    current_records=$(nc_get_host_records "$sld" "$tld")
-    if [ $? -ne 0 ]; then
+    if ! current_records=$(nc_get_host_records "$sld" "$tld"); then
         return 1
     fi
     host_params=""
@@ -189,8 +185,7 @@ dns_namecheap_rm() {
 dns_namecheap_test() {
     dns_log_info "Testing Namecheap DNS API connectivity"
     nc_setup_auth || return 1
-    response=$(dns_http_get "${NC_API_BASE}?ApiUser=${NAMECHEAP_USERNAME}&ApiKey=${NAMECHEAP_API_KEY}&UserName=${NAMECHEAP_USERNAME}&Command=namecheap.users.getAccountBalance&ClientIp=${SOURCEIP}")
-    if [ $? -ne 0 ]; then
+    if ! response=$(dns_http_get "${NC_API_BASE}?ApiUser=${NAMECHEAP_USERNAME}&ApiKey=${NAMECHEAP_API_KEY}&UserName=${NAMECHEAP_USERNAME}&Command=namecheap.users.getAccountBalance&ClientIp=${SOURCEIP}"); then
         dns_log_error "Failed to connect to Namecheap API"
         return 1
     fi

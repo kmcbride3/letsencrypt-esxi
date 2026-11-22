@@ -75,6 +75,23 @@ dns_duckdns_add() {
         dns_log_error "Failed to connect to DuckDNS API"
         return 1
     fi
+    if response=$(dns_http_get "$api_url"); then
+        if echo "$response" | grep -q "^OK"; then
+            dns_log_info "Successfully added TXT record for $domain"
+            dns_log_debug "Waiting for propagation..."
+            sleep 5
+            return 0
+        elif echo "$response" | grep -q "^KO"; then
+            dns_log_error "DuckDNS API returned error for $domain"
+            return 1
+        else
+            dns_log_error "Unexpected response from DuckDNS API: $response"
+            return 1
+        fi
+    else
+        dns_log_error "Failed to connect to DuckDNS API"
+        return 1
+    fi
 }
 
 # Remove TXT record
@@ -130,10 +147,9 @@ dns_duckdns_check_domain() {
         return 1
     fi
 
-    # Try to get current IP for the subdomain
     api_url="$DUCKDNS_API_BASE?domains=$subdomain&token=$DUCKDNS_TOKEN&verbose=true"
-
-    if response=$(dns_http_get "$api_url") && echo "$response" | grep -q "^OK"; then
+    if response=$(dns_http_get "$api_url"); then
+        if echo "$response" | grep -q "^OK"; then
         dns_log_info "DuckDNS subdomain $subdomain exists and is accessible"
         return 0
     else

@@ -47,9 +47,11 @@ _ns1_find_zone() {
     while [ -n "$test_domain" ]; do
         dns_log_debug "Testing zone: $test_domain"
         zone_url="$NS1_API_BASE/zones/$test_domain"
-        if response=$(dns_http_get "$zone_url" "X-NSONE-Key: $NS1_API_KEY\nContent-Type: application/json") && echo "$response" | grep -q '"zone"'; then
-            echo "$test_domain"
-            return 0
+        if response=$(dns_http_get "$zone_url" "X-NSONE-Key: $NS1_API_KEY\nContent-Type: application/json"); then
+            if echo "$response" | grep -q '"zone"'; then
+                echo "$test_domain"
+                return 0
+            fi
         fi
         if [ "$(echo "$test_domain" | awk -F'.' '{print NF}')" -le 2 ]; then
             break
@@ -65,12 +67,13 @@ _ns1_get_txt_records() {
     zone="$1"
     record_name="$2"
     record_url="$NS1_API_BASE/zones/$zone/$record_name/TXT"
-    if response=$(dns_http_get "$record_url" "X-NSONE-Key: $NS1_API_KEY\nContent-Type: application/json") && echo "$response" | grep -q '"answers"'; then
-        echo "$response"
-        return 0
-    else
-        return 1
+    if response=$(dns_http_get "$record_url" "X-NSONE-Key: $NS1_API_KEY\nContent-Type: application/json"); then
+        if echo "$response" | grep -q '"answers"'; then
+            echo "$response"
+            return 0
+        fi
     fi
+    return 1
 }
 
 # Add TXT record
@@ -113,7 +116,7 @@ dns_ns1_add() {
     fi
     record_data="{\n    \"zone\": \"$zone\",\n    \"domain\": \"$record_name\",\n    \"type\": \"TXT\",\n    \"ttl\": $NS1_TTL,\n    \"answers\": [\n        {\n            \"answer\": [$answers]\n        }\n    ]\n}"
     record_url="$NS1_API_BASE/zones/$zone/$record_name/TXT"
-    if response=$(dns_http_request "PUT" "$record_url" "$record_data" "X-NSONE-Key: $NS1_API_KEY\nContent-Type: application/json"); then
+    if dns_http_request "PUT" "$record_url" "$record_data" "X-NSONE-Key: $NS1_API_KEY\nContent-Type: application/json"; then
         dns_log_info "Successfully added TXT record for $domain"
         return 0
     else
@@ -166,9 +169,9 @@ dns_ns1_rm() {
     else
         dns_log_debug "Updating TXT record with remaining values"
         record_data="{\n    \"zone\": \"$zone\",\n    \"domain\": \"$record_name\",\n    \"type\": \"TXT\",\n    \"ttl\": $NS1_TTL,\n    \"answers\": [\n        {\n            \"answer\": [$answers]\n        }\n    ]\n}"
-        response=$(dns_http_request "PUT" "$record_url" "$record_data" "X-NSONE-Key: $NS1_API_KEY\nContent-Type: application/json")
+        dns_http_request "PUT" "$record_url" "$record_data" "X-NSONE-Key: $NS1_API_KEY\nContent-Type: application/json"
     fi
-    if [ $? -eq 0 ]; then
+    if dns_http_request "PUT" "$record_url" "$record_data" "X-NSONE-Key: $NS1_API_KEY\nContent-Type: application/json" > /dev/null 2>&1; then
         dns_log_info "Successfully removed TXT record for $domain"
         return 0
     else

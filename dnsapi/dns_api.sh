@@ -770,7 +770,6 @@ dns_init_esxi_environment() {
 
     # ESXi-optimized defaults (memory-based caching only)
     DNS_CACHE_TTL=120                         # 2 minutes - conservative for ESXi
-        DNS_USE_FILE_CACHE=0  # Always disabled for ESXi read-only filesystem (export for reference)
 
     # Check memory constraints specific to ESXi
     free_mem=""

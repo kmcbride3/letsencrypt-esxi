@@ -42,10 +42,11 @@ gd_get_domain() {
     full_domain="$1"
     test_domain="$full_domain"
     while [ "$(echo "$test_domain" | awk -F'.' '{print NF}')" -gt 1 ]; do
-        response=$(dns_http_get "$GD_API_BASE/domains/$test_domain" "$GD_AUTH_HEADER\nContent-Type: application/json" 2>/dev/null)
-        if [ $? -eq 0 ] && echo "$response" | grep -q '"domain"'; then
-            echo "$test_domain"
-            return 0
+        if response=$(dns_http_get "$GD_API_BASE/domains/$test_domain" "$GD_AUTH_HEADER\nContent-Type: application/json" 2>/dev/null); then
+            if echo "$response" | grep -q '"domain"'; then
+                echo "$test_domain"
+                return 0
+            fi
         fi
         test_domain=$(echo "$test_domain" | sed 's/^[^.]*\.//')
     done
@@ -66,8 +67,7 @@ gd_get_record_name() {
 gd_get_txt_records() {
     domain="$1"
     record_name="$2"
-    response=$(dns_http_get "$GD_API_BASE/domains/$domain/records/TXT/$record_name" "$GD_AUTH_HEADER\nContent-Type: application/json")
-    if [ $? -ne 0 ]; then
+    if ! response=$(dns_http_get "$GD_API_BASE/domains/$domain/records/TXT/$record_name" "$GD_AUTH_HEADER\nContent-Type: application/json"); then
         dns_log_debug "No existing TXT records found for $record_name.$domain"
         echo "[]"
         return 0
@@ -110,7 +110,7 @@ dns_godaddy_add() {
     new_records="${new_records}{\"data\":\"${txt_value}\",\"ttl\":${GD_TTL}}"
     new_records="${new_records}]"
     response=$(dns_http_request "PUT" "$GD_API_BASE/domains/$domain/records/TXT/$record_name" "$new_records" "$GD_AUTH_HEADER\nContent-Type: application/json")
-    if [ $? -eq 0 ]; then
+    if dns_http_request "PUT" "$GD_API_BASE/domains/$domain/records/TXT/$record_name" "$new_records" "$GD_AUTH_HEADER\nContent-Type: application/json" > /dev/null 2>&1; then
         dns_log_info "Successfully added TXT record for $full_domain"
         return 0
     else
@@ -159,21 +159,13 @@ dns_godaddy_rm() {
         return 0
     fi
     response=$(dns_http_request "PUT" "$GD_API_BASE/domains/$domain/records/TXT/$record_name" "$new_records" "$GD_AUTH_HEADER\nContent-Type: application/json")
-    if [ $? -eq 0 ]; then
+    if dns_http_request "PUT" "$GD_API_BASE/domains/$domain/records/TXT/$record_name" "$new_records" "$GD_AUTH_HEADER\nContent-Type: application/json" > /dev/null 2>&1; then
         dns_log_info "Successfully removed TXT record for $full_domain"
         return 0
     else
         dns_log_error "Failed to remove TXT record for $full_domain"
         return 1
     fi
-}
-
-# Test provider connectivity
-dns_godaddy_test() {
-    dns_log_info "Testing GoDaddy DNS API connectivity"
-    gd_setup_auth || return 1
-    response=$(dns_http_get "$GD_API_BASE/domains" "$GD_AUTH_HEADER\nContent-Type: application/json")
-    if [ $? -ne 0 ]; then
         dns_log_error "Failed to connect to GoDaddy API"
         return 1
     fi
