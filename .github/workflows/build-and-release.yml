@@ -17,10 +17,6 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    # Run the entire job inside the native vibauthor container, bypassing build.sh
-    container:
-      image: lamw/vibauthor@sha256:4d5001c3847d6dd0afac734e5512f02afccd555474729555e069622eb004b11a
-
     permissions:
       contents: read
 
@@ -60,7 +56,20 @@ jobs:
           VIB_TAG: ${{ steps.set_env.outputs.vib_tag }}
           COMMIT_DATE: ${{ github.event.head_commit.timestamp }}
 
-        run: /bin/sh ./build/create_vib.sh
+        run: |
+          export COMMIT_DATE="${COMMIT_DATE:-$(git show -s --format=%cI HEAD)}"
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --volume "$GITHUB_OUTPUT:/github_output" \
+            --workdir /workspace \
+            --env GH_REPO_NAME \
+            --env GH_REPOSITORY \
+            --env GH_REPO_OWNER \
+            --env VIB_TAG \
+            --env COMMIT_DATE \
+            --env GITHUB_OUTPUT=/github_output \
+            lamw/vibauthor@sha256:4d5001c3847d6dd0afac734e5512f02afccd555474729555e069622eb004b11a \
+            /bin/sh ./build/create_vib.sh
 
       - name: Store VIB
         uses: actions/upload-artifact@v7.0.1

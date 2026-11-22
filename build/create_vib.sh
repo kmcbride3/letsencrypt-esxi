@@ -35,7 +35,7 @@ VIB_BUILD=$(date +%s | cut -c5-) # VIB_BUILD: 6-digit truncated Unix timestamp
 
 # Setting up VIB spec confs
 VIB_NAME=${GH_REPO_OWNER:-w2c}-${GH_REPO_NAME:-letsencrypt-esxi}
-PACKAGE_NAME=${VIB_NAME%-esxi}
+PACKAGE_NAME=w2c-letsencrypt
 VIB_DESC="Let's Encrypt for ESXi"
 VENDOR="web-wack-creations"
 VIB_DESC_FILE=${STAGING_DIR}/descriptor.xml
