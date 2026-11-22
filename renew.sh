@@ -30,6 +30,12 @@ fi
 # Ensure defaults are present even if renew.cfg leaves values unset/empty.
 DOMAIN="${DOMAIN:-$(hostname -f)}"
 ACMEDIR="${ACMEDIR:-$LOCALDIR/.well-known/acme-challenge}"
+
+# Preparation steps
+if [ -z "$DOMAIN" ] || [ "$DOMAIN" = "${DOMAIN/.}" ]; then
+  log "Error: Hostname ${DOMAIN} is no FQDN."
+  exit
+fi
 DIRECTORY_URL="${DIRECTORY_URL:-https://acme-v02.api.letsencrypt.org/directory}"
 SSL_CERT_FILE="${SSL_CERT_FILE:-$LOCALDIR/ca-certificates.crt}"
 RENEW_DAYS="${RENEW_DAYS:-30}"
@@ -71,11 +77,39 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then
 fi
 log "Starting certificate renewal."
 
-# Preparation steps
-if [ -z "$DOMAIN" ] || [ "$DOMAIN" = "${DOMAIN/.}" ]; then
-  log "Error: Hostname ${DOMAIN} is no FQDN."
-  exit
-fi
+# Cleanup function to restore firewall rules
+cleanup_firewall() {
+  if [ "$CHALLENGE_TYPE" = "http-01" ]; then
+    # Kill HTTP server if still running
+    if [ -n "$HTTP_SERVER_PID" ]; then
+      kill -9 "$HTTP_SERVER_PID" 2>/dev/null || true
+    fi
+    # Restore original firewall states
+    if [ -n "$ORIGINAL_WEBACCESS_STATE" ] && [ "$ORIGINAL_WEBACCESS_STATE" = "false" ]; then
+      esxcli network firewall ruleset set -e false -r webAccess 2>/dev/null || true
+      log "Restored webAccess firewall rule to disabled"
+    fi
+    if [ -n "$ORIGINAL_VSPHERE_STATE" ] && [ "$ORIGINAL_VSPHERE_STATE" = "false" ]; then
+      esxcli network firewall ruleset set -e false -r vSphereClient 2>/dev/null || true
+      log "Restored vSphereClient firewall rule to disabled"
+    fi
+  fi
+  # Both challenge types use httpClient for ACME communication
+  if [ -n "$ORIGINAL_HTTPCLIENT_STATE" ] && [ "$ORIGINAL_HTTPCLIENT_STATE" = "false" ]; then
+    esxcli network firewall ruleset set -e false -r httpClient 2>/dev/null || true
+    log "Restored httpClient firewall rule to disabled"
+  fi
+}
+
+# Combined cleanup: firewall restoration and lockfile removal
+cleanup() {
+  cleanup_firewall
+  if [ -d "$LOCKDIR" ]; then
+    rmdir "$LOCKDIR" 2>/dev/null || true
+  fi
+}
+
+trap cleanup EXIT HUP INT TERM
 
 # Add a cronjob for auto renewal. The script is run once a week on Sunday at 00:00
 if ! grep -q "$LOCALDIR/$LOCALSCRIPT" /var/spool/cron/crontabs/root; then
@@ -118,38 +152,6 @@ is_automated_run() {
     if ps -o comm= -p $PPID 2>/dev/null | grep -q "crond"; then return 0; fi
     return 1
 }
-
-# Cleanup function to restore firewall rules
-cleanup_firewall() {
-  if [ "$CHALLENGE_TYPE" = "http-01" ]; then
-    # Kill HTTP server if still running
-    if [ -n "$HTTP_SERVER_PID" ]; then
-      kill -9 "$HTTP_SERVER_PID" 2>/dev/null || true
-    fi
-    # Restore original firewall states
-    if [ -n "$ORIGINAL_WEBACCESS_STATE" ] && [ "$ORIGINAL_WEBACCESS_STATE" = "false" ]; then
-      esxcli network firewall ruleset set -e false -r webAccess 2>/dev/null || true
-      log "Restored webAccess firewall rule to disabled"
-    fi
-    if [ -n "$ORIGINAL_VSPHERE_STATE" ] && [ "$ORIGINAL_VSPHERE_STATE" = "false" ]; then
-      esxcli network firewall ruleset set -e false -r vSphereClient 2>/dev/null || true
-      log "Restored vSphereClient firewall rule to disabled"
-    fi
-  fi
-  # Both challenge types use httpClient for ACME communication
-  if [ -n "$ORIGINAL_HTTPCLIENT_STATE" ] && [ "$ORIGINAL_HTTPCLIENT_STATE" = "false" ]; then
-    esxcli network firewall ruleset set -e false -r httpClient 2>/dev/null || true
-    log "Restored httpClient firewall rule to disabled"
-  fi
-}
-
-# Combined cleanup: firewall restoration and lockfile removal
-cleanup() {
-  cleanup_firewall
-  rmdir "$LOCKDIR" 2>/dev/null || true
-}
-
-trap cleanup EXIT INT TERM
 
 # Helper to enable outbound ACME firewall rule and store state
 enable_httpclient_firewall() {
