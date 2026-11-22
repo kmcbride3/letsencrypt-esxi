@@ -58,8 +58,7 @@ dns_duckdns_add() {
     subdomain=$(duckdns_validate_domain "$domain") || return 1
     dns_log_debug "Subdomain: $subdomain"
     api_url="$DUCKDNS_API_BASE?domains=$subdomain&token=$DUCKDNS_TOKEN&txt=$txt_value&verbose=true"
-    response=$(dns_http_get "$api_url")
-    if [ $? -eq 0 ]; then
+    if response=$(dns_http_get "$api_url"); then
         if echo "$response" | grep -q "^OK"; then
             dns_log_info "Successfully added TXT record for $domain"
             dns_log_debug "Waiting for propagation..."
@@ -86,8 +85,7 @@ dns_duckdns_rm() {
     duckdns_setup || return 1
     subdomain=$(duckdns_validate_domain "$domain") || return 1
     api_url="$DUCKDNS_API_BASE?domains=$subdomain&token=$DUCKDNS_TOKEN&txt=&clear=true&verbose=true"
-    response=$(dns_http_get "$api_url")
-    if [ $? -eq 0 ]; then
+    if response=$(dns_http_get "$api_url"); then
         if echo "$response" | grep -q "^OK"; then
             dns_log_info "Successfully removed TXT record for $domain"
             return 0
@@ -108,8 +106,7 @@ dns_duckdns_test() {
     dns_log_info "Testing DuckDNS API connectivity"
     duckdns_setup || return 1
     test_url="$DUCKDNS_API_BASE?domains=test&token=$DUCKDNS_TOKEN&verbose=true"
-    response=$(dns_http_get "$test_url")
-    if [ $? -ne 0 ]; then
+    if ! response=$(dns_http_get "$test_url"); then
         dns_log_error "Failed to connect to DuckDNS API"
         return 1
     fi
@@ -129,17 +126,14 @@ dns_duckdns_check_domain() {
         return 1
     fi
 
-    subdomain=$(_duckdns_validate_domain "$domain")
-    if [ $? -ne 0 ]; then
+    if ! subdomain=$(_duckdns_validate_domain "$domain"); then
         return 1
     fi
 
     # Try to get current IP for the subdomain
     api_url="$DUCKDNS_API_BASE?domains=$subdomain&token=$DUCKDNS_TOKEN&verbose=true"
 
-    response=$(dns_http_get "$api_url")
-
-    if [ $? -eq 0 ] && echo "$response" | grep -q "^OK"; then
+    if response=$(dns_http_get "$api_url") && echo "$response" | grep -q "^OK"; then
         dns_log_info "DuckDNS subdomain $subdomain exists and is accessible"
         return 0
     else

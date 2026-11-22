@@ -216,7 +216,6 @@ if [ "$CHALLENGE_TYPE" = "http-01" ]; then
 
   # Firewall management for HTTP-01 (needs inbound access on port 80/443)
   log "Configuring firewall for HTTP-01 challenge..."
-  firewall_enabled=$(esxcli network firewall get | grep "Enabled:" | awk '{print $NF}')
   webaccess_enabled=$(esxcli network firewall ruleset list | grep "webAccess" | awk '{print $NF}')
   vsphere_enabled=$(esxcli network firewall ruleset list | grep "vSphereClient" | awk '{print $NF}')
   # Store original states for restoration

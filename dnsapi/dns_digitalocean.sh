@@ -182,7 +182,7 @@ dns_digitalocean_rm() {
     if [ -n "$record_id" ]; then
         dns_log_debug "Deleting DigitalOcean record ID: $record_id"
         headers="$DO_AUTH_HEADER\nContent-Type: application/json"
-        delete_response=$(dns_http_delete "$DO_API_BASE/domains/$domain_name/records/$record_id" "$headers")
+        dns_http_delete "$DO_API_BASE/domains/$domain_name/records/$record_id" "$headers" >/dev/null || true
         dns_log_info "Deleted DigitalOcean TXT record"
     else
         dns_log_warn "No record ID found for cleanup (record may have already been deleted)"

@@ -47,8 +47,7 @@ _ns1_find_zone() {
     while [ -n "$test_domain" ]; do
         dns_log_debug "Testing zone: $test_domain"
         zone_url="$NS1_API_BASE/zones/$test_domain"
-        response=$(dns_http_get "$zone_url" "X-NSONE-Key: $NS1_API_KEY\nContent-Type: application/json")
-        if [ $? -eq 0 ] && echo "$response" | grep -q '"zone"'; then
+        if response=$(dns_http_get "$zone_url" "X-NSONE-Key: $NS1_API_KEY\nContent-Type: application/json") && echo "$response" | grep -q '"zone"'; then
             echo "$test_domain"
             return 0
         fi
@@ -66,8 +65,7 @@ _ns1_get_txt_records() {
     zone="$1"
     record_name="$2"
     record_url="$NS1_API_BASE/zones/$zone/$record_name/TXT"
-    response=$(dns_http_get "$record_url" "X-NSONE-Key: $NS1_API_KEY\nContent-Type: application/json")
-    if [ $? -eq 0 ] && echo "$response" | grep -q '"answers"'; then
+    if response=$(dns_http_get "$record_url" "X-NSONE-Key: $NS1_API_KEY\nContent-Type: application/json") && echo "$response" | grep -q '"answers"'; then
         echo "$response"
         return 0
     else
@@ -87,8 +85,7 @@ dns_ns1_add() {
         record_name="$zone"
     fi
     dns_log_debug "Zone: $zone, Record: $record_name"
-    existing_records=$(_ns1_get_txt_records "$zone" "$record_name")
-    if [ $? -eq 0 ]; then
+    if existing_records=$(_ns1_get_txt_records "$zone" "$record_name"); then
         dns_log_debug "Record exists, adding to existing TXT records"
         answers=""
         temp_file="/tmp/ns1_answers_$$"
@@ -116,8 +113,7 @@ dns_ns1_add() {
     fi
     record_data="{\n    \"zone\": \"$zone\",\n    \"domain\": \"$record_name\",\n    \"type\": \"TXT\",\n    \"ttl\": $NS1_TTL,\n    \"answers\": [\n        {\n            \"answer\": [$answers]\n        }\n    ]\n}"
     record_url="$NS1_API_BASE/zones/$zone/$record_name/TXT"
-    response=$(dns_http_request "PUT" "$record_url" "$record_data" "X-NSONE-Key: $NS1_API_KEY\nContent-Type: application/json")
-    if [ $? -eq 0 ]; then
+    if response=$(dns_http_request "PUT" "$record_url" "$record_data" "X-NSONE-Key: $NS1_API_KEY\nContent-Type: application/json"); then
         dns_log_info "Successfully added TXT record for $domain"
         return 0
     else
@@ -137,8 +133,7 @@ dns_ns1_rm() {
     if [ -z "$record_name" ] || [ "$record_name" = "$domain" ]; then
         record_name="$zone"
     fi
-    existing_records=$(_ns1_get_txt_records "$zone" "$record_name")
-    if [ $? -ne 0 ]; then
+    if ! existing_records=$(_ns1_get_txt_records "$zone" "$record_name"); then
         dns_log_warn "TXT record not found for $domain"
         return 0
     fi
@@ -186,8 +181,7 @@ dns_ns1_rm() {
 dns_ns1_test() {
     dns_log_info "Testing NS1 API connectivity"
     _ns1_setup || return 1
-    response=$(dns_http_get "$NS1_API_BASE/zones" "X-NSONE-Key: $NS1_API_KEY\nContent-Type: application/json")
-    if [ $? -ne 0 ]; then
+    if ! response=$(dns_http_get "$NS1_API_BASE/zones" "X-NSONE-Key: $NS1_API_KEY\nContent-Type: application/json"); then
         dns_log_error "Failed to connect to NS1 API"
         return 1
     fi

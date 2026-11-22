@@ -55,7 +55,7 @@ nc_setup_auth() {
 
 nc_get_domain_parts() {
     domain="$1"
-    test_domain="$domain"
+    # domain assignment handled below, test_domain will be derived
     tld=""
     sld=""
     common_tlds="com net org info biz us uk co.uk me io"

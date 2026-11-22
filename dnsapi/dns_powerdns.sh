@@ -67,7 +67,7 @@ _pdns_find_zone() {
         if [ -n "$zone_name" ]; then
             zone_name=$(echo "$zone_name" | sed 's/\.$//')
             if echo "$domain" | grep -E "(^|\\.)${zone_name}$" > /dev/null; then
-                zone_length=$(echo "$zone_name" | wc -c)
+                zone_length=${#zone_name}
                 if [ "$zone_length" -gt "$best_length" ]; then
                     best_zone="$zone_name"
                     best_length="$zone_length"

@@ -68,7 +68,7 @@ dns_manual_add() {
     fi
 
     log "Press Enter when the record is created and has propagated..."
-    read -r dummy
+    read -r dummy  # Required for user acknowledgment
 
     log "Verifying DNS propagation..."
     if dns_check_propagation "$domain" "$txt_value" 180 15; then
@@ -83,7 +83,7 @@ dns_manual_add() {
         log "- Different DNS resolvers"
         log ""
         log "Press Enter to continue anyway, or Ctrl+C to abort..."
-    read -r dummy
+    read -r dummy  # Required for user acknowledgment
         return 0
     fi
 }
@@ -114,6 +114,6 @@ dns_manual_rm() {
         return 0
     fi
     log "Press Enter to continue..."
-    read -r dummy
+    read -r dummy  # Required for user acknowledgment
     return 0
 }

@@ -91,7 +91,7 @@ _r53_wait_for_change() {
     dns_log_info "Waiting for Route53 change to propagate (Change ID: $change_id)"
     waited=0
     check_interval=10
-    while [ $waited -lt $max_wait ]; do
+    while [ "$waited" -lt "$max_wait" ]; do
         status=$(aws route53 get-change --id "$change_id" --query "ChangeInfo.Status" --output text 2>/dev/null)
         if [ "$status" = "INSYNC" ]; then
             dns_log_info "Route53 change propagated successfully"
